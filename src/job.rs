@@ -13,8 +13,9 @@ use itertools::Itertools;
 use rand::{thread_rng, Rng};
 
 use crate::blob::BlobObject;
-use crate::chat::{self, ChatId};
+use crate::chat::{self, Chat, ChatId};
 use crate::config::Config;
+use crate::constants::Chattype;
 use crate::contact::{normalize_name, Contact, Modifier, Origin};
 use crate::context::Context;
 use crate::dc_tools::{dc_delete_file, dc_read_file, time};
