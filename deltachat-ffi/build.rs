@@ -23,6 +23,8 @@ fn main() {
         version = env::var("CARGO_PKG_VERSION").unwrap(),
         libs_priv = libs_priv,
         prefix = env::var("PREFIX").unwrap_or_else(|_| "/usr/local".to_string()),
+        libdir = env::var("LIBDIR").unwrap_or_else(|_| "/usr/local/lib".to_string()),
+        includedir = env::var("INCLUDEDIR").unwrap_or_else(|_| "/usr/local/include".to_string()),
     );
 
     fs::create_dir_all(target_path.join("pkgconfig")).unwrap();
