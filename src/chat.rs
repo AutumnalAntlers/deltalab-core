@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::aheader::EncryptPreference;
 use crate::blob::{BlobError, BlobObject};
-use crate::chatlist::dc_get_archived_cnt;
 use crate::color::str_to_color;
 use crate::config::Config;
 use crate::constants::{
@@ -892,9 +891,7 @@ impl Chat {
             .context(format!("Failed loading chat {} from database", chat_id))?;
 
         if chat.id.is_archived_link() {
-            let tempname = stock_str::archived_chats(context).await;
-            let cnt = dc_get_archived_cnt(context).await?;
-            chat.name = format!("{} ({})", tempname, cnt);
+            chat.name = stock_str::archived_chats(context).await;
         } else {
             if chat.typ == Chattype::Single {
                 let mut chat_name = "Err [Name not found]".to_owned();
@@ -3033,7 +3030,7 @@ pub(crate) async fn add_info_msg(context: &Context, chat_id: ChatId, text: impl 
 mod tests {
     use super::*;
 
-    use crate::chatlist::Chatlist;
+    use crate::chatlist::{dc_get_archived_cnt, Chatlist};
     use crate::constants::{DC_GCL_ARCHIVED_ONLY, DC_GCL_NO_SPECIALS};
     use crate::contact::Contact;
     use crate::dc_receive_imf::dc_receive_imf;
@@ -3989,6 +3986,48 @@ mod tests {
         let msg = message::Message::load_from_db(&t, msg_id).await?;
         assert_eq!(msg.state, MessageState::InFresh);
         assert_eq!(t.get_fresh_msgs().await?.len(), 0);
+
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_contact_request_archive() -> Result<()> {
+        let t = TestContext::new_alice().await;
+
+        dc_receive_imf(
+            &t,
+            b"From: bob@example.org\n\
+                 To: alice@example.com\n\
+                 Message-ID: <2@example.org>\n\
+                 Chat-Version: 1.0\n\
+                 Date: Sun, 22 Mar 2021 19:37:57 +0000\n\
+                 \n\
+                 hello\n",
+            "INBOX",
+            1,
+            false,
+        )
+        .await?;
+
+        let chats = Chatlist::try_load(&t, 0, None, None).await?;
+        assert_eq!(chats.len(), 1);
+        let chat_id = chats.get_chat_id(0);
+        assert!(Chat::load_from_db(&t, chat_id).await?.is_contact_request());
+        assert_eq!(dc_get_archived_cnt(&t).await?, 0);
+
+        // archive request without accepting or blocking
+        chat_id.set_visibility(&t, ChatVisibility::Archived).await?;
+
+        let chats = Chatlist::try_load(&t, 0, None, None).await?;
+        assert_eq!(chats.len(), 1);
+        let chat_id = chats.get_chat_id(0);
+        assert!(chat_id.is_archived_link());
+        assert_eq!(dc_get_archived_cnt(&t).await?, 1);
+
+        let chats = Chatlist::try_load(&t, DC_GCL_ARCHIVED_ONLY, None, None).await?;
+        assert_eq!(chats.len(), 1);
+        let chat_id = chats.get_chat_id(0);
+        assert!(Chat::load_from_db(&t, chat_id).await?.is_contact_request());
 
         Ok(())
     }
