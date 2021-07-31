@@ -104,6 +104,10 @@ pub(crate) async fn dc_receive_imf_inner(
         // client that relies in the SMTP server to generate one.
         // true eg. for the Webmailer used in all-inkl-KAS
         dc_create_incoming_rfc724_mid(&mime_parser));
+    info!(
+        context,
+        "received message {} has Message-Id: {}", server_uid, rfc724_mid
+    );
 
     // check, if the mail is already in our database - if so, just update the folder/uid
     // (if the mail was moved around) and finish. (we may get a mail twice eg. if it is
@@ -120,11 +124,9 @@ pub(crate) async fn dc_receive_imf_inner(
     }
 
     // the function returns the number of created messages in the database
-    let mut chat_id = ChatId::new(0);
     let mut hidden = false;
 
     let mut needs_delete_job = false;
-    let mut insert_msg_id = MsgId::new_unset();
 
     let mut created_db_entries = Vec::new();
     let mut create_event_to_send = Some(CreateEvent::MsgsChanged);
@@ -164,38 +166,34 @@ pub(crate) async fn dc_receive_imf_inner(
     );
 
     // Add parts
-    if mime_parser.parts.last().is_some() {
-        add_parts(
-            context,
-            &mut mime_parser,
-            imf_raw,
-            incoming,
-            incoming_origin,
-            server_folder,
-            server_uid,
-            &to_ids,
-            &rfc724_mid,
-            &mut sent_timestamp,
-            from_id,
-            &mut hidden,
-            &mut chat_id,
-            seen,
-            &mut needs_delete_job,
-            &mut insert_msg_id,
-            &mut created_db_entries,
-            &mut create_event_to_send,
-            fetching_existing_messages,
-            prevent_rename,
-        )
-        .await
-        .map_err(|err| err.context("add_parts error"))?;
+    let chat_id = add_parts(
+        context,
+        &mut mime_parser,
+        imf_raw,
+        incoming,
+        incoming_origin,
+        server_folder,
+        server_uid,
+        &to_ids,
+        rfc724_mid,
+        &mut sent_timestamp,
+        from_id,
+        &mut hidden,
+        seen,
+        &mut needs_delete_job,
+        &mut created_db_entries,
+        &mut create_event_to_send,
+        fetching_existing_messages,
+        prevent_rename,
+    )
+    .await
+    .map_err(|err| err.context("add_parts error"))?;
+
+    let insert_msg_id = if let Some((_chat_id, msg_id)) = created_db_entries.last() {
+        *msg_id
     } else {
-        // there are parts in this message, do some basic calculations so that the variables
-        // are correct in the further processing
-        if sent_timestamp > time() {
-            sent_timestamp = time()
-        }
-    }
+        MsgId::new_unset()
+    };
 
     if mime_parser.location_kml.is_some() || mime_parser.message_kml.is_some() {
         save_locations(
@@ -288,11 +286,6 @@ pub(crate) async fn dc_receive_imf_inner(
         }
     }
 
-    info!(
-        context,
-        "received message {} has Message-Id: {}", server_uid, rfc724_mid
-    );
-
     if let Some(create_event_to_send) = create_event_to_send {
         for (chat_id, msg_id) in created_db_entries {
             let event = match create_event_to_send {
@@ -366,23 +359,20 @@ async fn add_parts(
     server_folder: &str,
     server_uid: u32,
     to_ids: &ContactIds,
-    rfc724_mid: &str,
+    rfc724_mid: String,
     sent_timestamp: &mut i64,
     from_id: u32,
     hidden: &mut bool,
-    chat_id: &mut ChatId,
     seen: bool,
     needs_delete_job: &mut bool,
-    insert_msg_id: &mut MsgId,
     created_db_entries: &mut Vec<(ChatId, MsgId)>,
     create_event_to_send: &mut Option<CreateEvent>,
     fetching_existing_messages: bool,
     prevent_rename: bool,
-) -> Result<()> {
+) -> Result<ChatId> {
     let mut state: MessageState;
+    let mut chat_id = ChatId::new(0);
     let mut chat_id_blocked = Blocked::Not;
-    let mut mime_in_reply_to = String::new();
-    let mut mime_references = String::new();
     let mut incoming_origin = incoming_origin;
 
     let parent = get_parent_message(context, mime_parser).await?;
@@ -408,7 +398,7 @@ async fn add_parts(
         match show_emails {
             ShowEmails::Off => {
                 info!(context, "Classical email not shown (TRASH)");
-                *chat_id = DC_CHAT_ID_TRASH;
+                chat_id = DC_CHAT_ID_TRASH;
                 allow_creation = false;
             }
             ShowEmails::AcceptedContacts => allow_creation = false,
@@ -433,7 +423,7 @@ async fn add_parts(
         // handshake may mark contacts as verified and must be processed before chats are created
         if mime_parser.get(HeaderDef::SecureJoin).is_some() {
             is_dc_message = MessengerMessage::Yes; // avoid discarding by show_emails setting
-            *chat_id = ChatId::new(0);
+            chat_id = ChatId::new(0);
             allow_creation = true;
             match handle_securejoin_handshake(context, mime_parser, from_id).await {
                 Ok(securejoin::HandshakeMessage::Done) => {
@@ -451,7 +441,7 @@ async fn add_parts(
                 Err(err) => {
                     *hidden = true;
                     warn!(context, "Error in Secure-Join message handling: {}", err);
-                    return Ok(());
+                    return Ok(chat_id);
                 }
             }
         }
@@ -461,7 +451,7 @@ async fn add_parts(
             .unwrap_or_default();
 
         if chat_id.is_unset() && mime_parser.failure_report.is_some() {
-            *chat_id = DC_CHAT_ID_TRASH;
+            chat_id = DC_CHAT_ID_TRASH;
             info!(context, "Message belongs to an NDN (TRASH)",);
         }
 
@@ -470,7 +460,7 @@ async fn add_parts(
 
             let (new_chat_id, new_chat_id_blocked) =
                 lookup_chat_by_reply(context, &mime_parser, &parent, from_id, to_ids).await?;
-            *chat_id = new_chat_id;
+            chat_id = new_chat_id;
             chat_id_blocked = new_chat_id_blocked;
         }
 
@@ -498,7 +488,7 @@ async fn add_parts(
                 to_ids,
             )
             .await?;
-            *chat_id = new_chat_id;
+            chat_id = new_chat_id;
             chat_id_blocked = new_chat_id_blocked;
             if !chat_id.is_unset()
                 && chat_id_blocked != Blocked::Not
@@ -511,9 +501,9 @@ async fn add_parts(
 
         // In lookup_chat_by_reply() and create_or_lookup_group(), it can happen that the message is put into a chat
         // but the From-address is not a member of this chat.
-        if !chat_id.is_unset() && !chat::is_contact_in_chat(context, *chat_id, from_id as u32).await
+        if !chat_id.is_unset() && !chat::is_contact_in_chat(context, chat_id, from_id as u32).await
         {
-            let chat = Chat::load_from_db(context, *chat_id).await?;
+            let chat = Chat::load_from_db(context, chat_id).await?;
             if chat.is_protected() {
                 let s = stock_str::unknown_sender_for_chat(context).await;
                 mime_parser.repl_msg_by_error(s);
@@ -539,7 +529,7 @@ async fn add_parts(
                             mime_parser,
                         )
                         .await;
-                        *chat_id = new_chat_id;
+                        chat_id = new_chat_id;
                         chat_id_blocked = new_chat_id_blocked;
                     }
                 }
@@ -552,7 +542,7 @@ async fn add_parts(
                             mime_parser,
                         )
                         .await;
-                        *chat_id = new_chat_id;
+                        chat_id = new_chat_id;
                         chat_id_blocked = new_chat_id_blocked;
                     }
                 }
@@ -581,14 +571,14 @@ async fn add_parts(
             };
 
             if let Some(chat) = test_normal_chat {
-                *chat_id = chat.id;
+                chat_id = chat.id;
                 chat_id_blocked = chat.blocked;
             } else if allow_creation {
                 if let Ok(chat) = ChatIdBlocked::get_for_contact(context, from_id, create_blocked)
                     .await
                     .log_err(context, "Failed to get (new) chat for contact")
                 {
-                    *chat_id = chat.id;
+                    chat_id = chat.id;
                     chat_id_blocked = chat.blocked;
                 }
             }
@@ -612,7 +602,7 @@ async fn add_parts(
         }
         if chat_id.is_unset() {
             // maybe from_id is null or sth. else is suspicious, move message to trash
-            *chat_id = DC_CHAT_ID_TRASH;
+            chat_id = DC_CHAT_ID_TRASH;
             info!(context, "No chat id for incoming msg (TRASH)")
         }
 
@@ -637,7 +627,7 @@ async fn add_parts(
             && (is_dc_message == MessengerMessage::No)
             && context.is_spam_folder(server_folder).await?;
         if is_spam {
-            *chat_id = DC_CHAT_ID_TRASH;
+            chat_id = DC_CHAT_ID_TRASH;
             info!(context, "Message is probably spam (TRASH)");
         }
     } else {
@@ -651,7 +641,7 @@ async fn add_parts(
         // handshake may mark contacts as verified and must be processed before chats are created
         if mime_parser.get(HeaderDef::SecureJoin).is_some() {
             is_dc_message = MessengerMessage::Yes; // avoid discarding by show_emails setting
-            *chat_id = ChatId::new(0);
+            chat_id = ChatId::new(0);
             allow_creation = true;
             match observe_securejoin_on_other_device(context, mime_parser, to_id).await {
                 Ok(securejoin::HandshakeMessage::Done)
@@ -664,7 +654,7 @@ async fn add_parts(
                 Err(err) => {
                     *hidden = true;
                     warn!(context, "Error in Secure-Join watching: {}", err);
-                    return Ok(());
+                    return Ok(chat_id);
                 }
             }
         }
@@ -690,7 +680,7 @@ async fn add_parts(
         if is_draft {
             // Most mailboxes have a "Drafts" folder where constantly new emails appear but we don't actually want to show them
             info!(context, "Email is probably just a draft (TRASH)");
-            *chat_id = DC_CHAT_ID_TRASH;
+            chat_id = DC_CHAT_ID_TRASH;
             allow_creation = false;
         }
 
@@ -699,7 +689,7 @@ async fn add_parts(
 
             let (new_chat_id, new_chat_id_blocked) =
                 lookup_chat_by_reply(context, &mime_parser, &parent, from_id, to_ids).await?;
-            *chat_id = new_chat_id;
+            chat_id = new_chat_id;
             chat_id_blocked = new_chat_id_blocked;
         }
 
@@ -714,7 +704,7 @@ async fn add_parts(
                     to_ids,
                 )
                 .await?;
-                *chat_id = new_chat_id;
+                chat_id = new_chat_id;
                 chat_id_blocked = new_chat_id_blocked;
                 // automatically unblock chat when the user sends a message
                 if !chat_id.is_unset() && chat_id_blocked != Blocked::Not {
@@ -731,7 +721,7 @@ async fn add_parts(
                 if let Ok(chat) =
                     ChatIdBlocked::get_for_contact(context, to_id, create_blocked).await
                 {
-                    *chat_id = chat.id;
+                    chat_id = chat.id;
                     chat_id_blocked = chat.blocked;
                 }
 
@@ -756,7 +746,7 @@ async fn add_parts(
                     .await
                     .log_err(context, "Failed to get (new) chat for contact")
             {
-                *chat_id = chat.id;
+                chat_id = chat.id;
                 chat_id_blocked = chat.blocked;
             }
 
@@ -766,13 +756,13 @@ async fn add_parts(
             }
         }
         if chat_id.is_unset() {
-            *chat_id = DC_CHAT_ID_TRASH;
+            chat_id = DC_CHAT_ID_TRASH;
             info!(context, "No chat id for outgoing message (TRASH)")
         }
     }
 
     if fetching_existing_messages && mime_parser.decrypting_failed {
-        *chat_id = DC_CHAT_ID_TRASH;
+        chat_id = DC_CHAT_ID_TRASH;
         // We are only gathering old messages on first start. We do not want to add loads of non-decryptable messages to the chats.
         info!(context, "Existing non-decipherable message. (TRASH)");
     }
@@ -808,9 +798,9 @@ async fn add_parts(
         && (is_dc_message != MessengerMessage::Yes
             || parent.is_none()
             || parent.unwrap().ephemeral_timer != ephemeral_timer)
-        && (*chat_id).get_ephemeral_timer(context).await? != ephemeral_timer
+        && chat_id.get_ephemeral_timer(context).await? != ephemeral_timer
     {
-        if let Err(err) = (*chat_id)
+        if let Err(err) = chat_id
             .inner_set_ephemeral_timer(context, ephemeral_timer)
             .await
         {
@@ -821,7 +811,7 @@ async fn add_parts(
         } else if mime_parser.is_system_message != SystemMessage::EphemeralTimerChanged {
             chat::add_info_msg(
                 context,
-                *chat_id,
+                chat_id,
                 stock_ephemeral_timer_changed(context, ephemeral_timer, from_id).await,
             )
             .await;
@@ -845,7 +835,7 @@ async fn add_parts(
 
     // if a chat is protected, check additional properties
     if !chat_id.is_special() {
-        let chat = Chat::load_from_db(context, *chat_id).await?;
+        let chat = Chat::load_from_db(context, chat_id).await?;
         let new_status = match mime_parser.is_system_message {
             SystemMessage::ChatProtectionEnabled => Some(ProtectionStatus::Protected),
             SystemMessage::ChatProtectionDisabled => Some(ProtectionStatus::Unprotected),
@@ -864,11 +854,11 @@ async fn add_parts(
                     if let Err(e) = chat_id.inner_set_protection(context, new_status).await {
                         chat::add_info_msg(
                             context,
-                            *chat_id,
+                            chat_id,
                             format!("Cannot set protection: {}", e),
                         )
                         .await;
-                        return Ok(()); // do not return an error as this would result in retrying the message
+                        return Ok(chat_id); // do not return an error as this would result in retrying the message
                     }
                     set_better_msg(
                         mime_parser,
@@ -885,7 +875,7 @@ async fn add_parts(
     // however, we cannot do this earlier as we need from_id to be set
     let in_fresh = state == MessageState::InFresh;
     let rcvd_timestamp = time();
-    let sort_timestamp = calc_sort_timestamp(context, *sent_timestamp, *chat_id, in_fresh).await?;
+    let sort_timestamp = calc_sort_timestamp(context, *sent_timestamp, chat_id, in_fresh).await?;
 
     // Ensure replies to messages are sorted after the parent message.
     //
@@ -905,13 +895,15 @@ async fn add_parts(
     // if the mime-headers should be saved, find out its size
     // (the mime-header ends with an empty line)
     let save_mime_headers = context.get_config_bool(Config::SaveMimeHeaders).await?;
-    if let Some(raw) = mime_parser.get(HeaderDef::InReplyTo) {
-        mime_in_reply_to = raw.clone();
-    }
 
-    if let Some(raw) = mime_parser.get(HeaderDef::References) {
-        mime_references = raw.clone();
-    }
+    let mime_in_reply_to = mime_parser
+        .get(HeaderDef::InReplyTo)
+        .cloned()
+        .unwrap_or_default();
+    let mime_references = mime_parser
+        .get(HeaderDef::References)
+        .cloned()
+        .unwrap_or_default();
 
     // fine, so far.  now, split the message into simple parts usable as "short messages"
     // and add them to the database (mails sent by other messenger clients should result
@@ -943,10 +935,7 @@ async fn add_parts(
 
     let sent_timestamp = *sent_timestamp;
     let is_hidden = *hidden;
-    let chat_id = *chat_id;
-
-    // TODO: can this clone be avoided?
-    let rfc724_mid = rfc724_mid.to_string();
+    let chat_id = chat_id;
 
     let mut is_hidden = is_hidden;
     let mut ids = Vec::with_capacity(parts.len());
@@ -1059,10 +1048,6 @@ INSERT INTO msgs
     }
     drop(conn);
 
-    if let Some(id) = ids.iter().last() {
-        *insert_msg_id = *id;
-    }
-
     if !is_hidden {
         chat_id.unarchive(context).await?;
     }
@@ -1113,7 +1098,7 @@ INSERT INTO msgs
             .ok_or_log_msg(context, "Could not update LastSubject of chat");
     }
 
-    Ok(())
+    Ok(chat_id)
 }
 
 async fn save_locations(
