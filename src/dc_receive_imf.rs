@@ -532,7 +532,7 @@ async fn add_parts(
                                 list_id,
                                 mime_parser,
                             )
-                            .await
+                            .await?
                         {
                             chat_id = Some(new_chat_id);
                             chat_id_blocked = new_chat_id_blocked;
@@ -548,7 +548,7 @@ async fn add_parts(
                                 sender,
                                 mime_parser,
                             )
-                            .await
+                            .await?
                         {
                             chat_id = Some(new_chat_id);
                             chat_id_blocked = new_chat_id_blocked;
@@ -798,6 +798,12 @@ async fn add_parts(
 
     let location_kml_is = mime_parser.location_kml.is_some();
 
+    // correct message_timestamp, it should not be used before,
+    // however, we cannot do this earlier as we need from_id to be set
+    let in_fresh = state == MessageState::InFresh;
+    let rcvd_timestamp = time();
+    let sort_timestamp = calc_sort_timestamp(context, *sent_timestamp, chat_id, in_fresh).await?;
+
     // Apply ephemeral timer changes to the chat.
     //
     // Only non-hidden timers are applied now. Timers from hidden
@@ -825,6 +831,7 @@ async fn add_parts(
                 context,
                 chat_id,
                 stock_ephemeral_timer_changed(context, ephemeral_timer, from_id).await,
+                sort_timestamp,
             )
             .await;
         }
@@ -868,6 +875,7 @@ async fn add_parts(
                             context,
                             chat_id,
                             format!("Cannot set protection: {}", e),
+                            sort_timestamp,
                         )
                         .await;
                         return Ok(chat_id); // do not return an error as this would result in retrying the message
@@ -882,12 +890,6 @@ async fn add_parts(
             }
         }
     }
-
-    // correct message_timestamp, it should not be used before,
-    // however, we cannot do this earlier as we need from_id to be set
-    let in_fresh = state == MessageState::InFresh;
-    let rcvd_timestamp = time();
-    let sort_timestamp = calc_sort_timestamp(context, *sent_timestamp, chat_id, in_fresh).await?;
 
     // Ensure replies to messages are sorted after the parent message.
     //
@@ -1347,13 +1349,9 @@ async fn create_or_lookup_group(
     };
 
     // check, if we have a chat with this group ID
-    let mut chat_id = if let Ok((chat_id, _protected, _blocked)) =
-        chat::get_chat_id_by_grpid(context, &grpid).await
-    {
-        Some(chat_id)
-    } else {
-        None
-    };
+    let mut chat_id = chat::get_chat_id_by_grpid(context, &grpid)
+        .await?
+        .map(|(chat_id, _protected, _blocked)| chat_id);
 
     // For chat messages, we don't have to guess (is_*probably*_private_reply()) but we know for sure that
     // they belong to the group because of the Chat-Group-Id or Message-Id header
@@ -1616,7 +1614,7 @@ async fn create_or_lookup_mailinglist(
     allow_creation: bool,
     list_id_header: &str,
     mime_parser: &MimeMessage,
-) -> Option<(ChatId, Blocked)> {
+) -> Result<Option<(ChatId, Blocked)>> {
     static LIST_ID: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(.+)<(.+)>$").unwrap());
     let (mut name, listid) = match LIST_ID.captures(list_id_header) {
         Some(cap) => (cap[1].trim().to_string(), cap[2].trim().to_string()),
@@ -1630,8 +1628,8 @@ async fn create_or_lookup_mailinglist(
         ),
     };
 
-    if let Ok((chat_id, _, blocked)) = chat::get_chat_id_by_grpid(context, &listid).await {
-        return Some((chat_id, blocked));
+    if let Some((chat_id, _, blocked)) = chat::get_chat_id_by_grpid(context, &listid).await? {
+        return Ok(Some((chat_id, blocked)));
     }
 
     // for mailchimp lists, the name in `ListId` is just a long number.
@@ -1678,7 +1676,7 @@ async fn create_or_lookup_mailinglist(
 
     if allow_creation {
         // list does not exist but should be created
-        match create_multiuser_record(
+        let chat_id = create_multiuser_record(
             context,
             Chattype::Mailinglist,
             &listid,
@@ -1687,25 +1685,18 @@ async fn create_or_lookup_mailinglist(
             ProtectionStatus::Unprotected,
         )
         .await
-        {
-            Ok(chat_id) => {
-                chat::add_to_chat_contacts_table(context, chat_id, DC_CONTACT_ID_SELF).await;
-                Some((chat_id, Blocked::Request))
-            }
-            Err(e) => {
-                warn!(
-                    context,
-                    "Failed to create mailinglist '{}' for grpid={}: {}",
-                    &name,
-                    &listid,
-                    e.to_string()
-                );
-                None
-            }
-        }
+        .map_err(|err| {
+            err.context(format!(
+                "Failed to create mailinglist '{}' for grpid={}",
+                &name, &listid
+            ))
+        })?;
+
+        chat::add_to_chat_contacts_table(context, chat_id, DC_CONTACT_ID_SELF).await;
+        Ok(Some((chat_id, Blocked::Request)))
     } else {
         info!(context, "creating list forbidden by caller");
-        None
+        Ok(None)
     }
 }
 

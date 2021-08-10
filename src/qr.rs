@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::constants::Blocked;
 use crate::contact::{addr_normalize, may_be_valid_addr, Contact, Origin};
 use crate::context::Context;
+use crate::dc_tools::time;
 use crate::key::Fingerprint;
 use crate::log::LogExt;
 use crate::lot::{Lot, LotState};
@@ -160,7 +161,13 @@ async fn decode_openpgp(context: &Context, qr: &str) -> Lot {
                 .await
                 .log_err(context, "Failed to create (new) chat for contact")
             {
-                chat::add_info_msg(context, chat.id, format!("{} verified.", peerstate.addr)).await;
+                chat::add_info_msg(
+                    context,
+                    chat.id,
+                    format!("{} verified.", peerstate.addr),
+                    time(),
+                )
+                .await;
             }
         } else if let Some(addr) = addr {
             lot.state = LotState::QrFprMismatch;
@@ -324,11 +331,9 @@ pub async fn set_config_from_qr(context: &Context, qr: &str) -> Result<(), Error
             let chat_id = if lot.state == LotState::QrReviveVerifyContact {
                 None
             } else {
-                Some(
-                    get_chat_id_by_grpid(context, &lot.text2.unwrap_or_default())
-                        .await?
-                        .0,
-                )
+                get_chat_id_by_grpid(context, &lot.text2.unwrap_or_default())
+                    .await?
+                    .map(|(chat_id, _protected, _blocked)| chat_id)
             };
             token::save(
                 context,
