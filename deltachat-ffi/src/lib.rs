@@ -275,7 +275,15 @@ pub unsafe extern "C" fn dc_get_connectivity_html(
         return "".strdup();
     }
     let ctx = &*context;
-    block_on(async move { ctx.get_connectivity_html().await.strdup() })
+    block_on(async move {
+        match ctx.get_connectivity_html().await {
+            Ok(html) => html.strdup(),
+            Err(err) => {
+                error!(ctx, "Failed to get connectivity html: {}", err);
+                "".strdup()
+            }
+        }
+    })
 }
 
 #[no_mangle]
@@ -632,7 +640,10 @@ pub unsafe extern "C" fn dc_get_chatlist(
     let qi = if query_id == 0 { None } else { Some(query_id) };
 
     block_on(async move {
-        match chatlist::Chatlist::try_load(ctx, flags as usize, qs.as_deref(), qi).await {
+        match chatlist::Chatlist::try_load(ctx, flags as usize, qs.as_deref(), qi)
+            .await
+            .log_err(ctx, "Failed to get chatlist")
+        {
             Ok(list) => {
                 let ffi_list = ChatlistWrapper { context, list };
                 Box::into_raw(Box::new(ffi_list))
@@ -3603,7 +3614,16 @@ pub unsafe extern "C" fn dc_provider_new_from_email(
         return ptr::null();
     }
     let addr = to_string_lossy(addr);
-    match block_on(provider::get_provider_info(addr.as_str())) {
+
+    let ctx = &*context;
+    let socks5_enabled = block_on(async move {
+        ctx.get_config_bool(config::Config::Socks5Enabled)
+            .await
+            .log_err(ctx, "Can't get config")
+            .unwrap_or_default()
+    });
+
+    match block_on(provider::get_provider_info(addr.as_str(), socks5_enabled)) {
         Some(provider) => provider,
         None => ptr::null_mut(),
     }

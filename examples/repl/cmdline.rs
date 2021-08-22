@@ -514,9 +514,15 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
             let file = dirs::home_dir()
                 .unwrap_or_default()
                 .join("connectivity.html");
-            let html = context.get_connectivity_html().await;
-            fs::write(&file, html)?;
-            println!("Report written to: {:#?}", file);
+            match context.get_connectivity_html().await {
+                Ok(html) => {
+                    fs::write(&file, html)?;
+                    println!("Report written to: {:#?}", file);
+                }
+                Err(err) => {
+                    bail!("Failed to get connectivity html: {}", err);
+                }
+            }
         }
         "maybenetwork" => {
             context.maybe_network().await;
@@ -1162,7 +1168,11 @@ pub async fn cmdline(context: Context, line: &str, chat_id: &mut ChatId) -> Resu
         }
         "providerinfo" => {
             ensure!(!arg1.is_empty(), "Argument <addr> missing.");
-            match provider::get_provider_info(arg1).await {
+            let socks5_enabled = context
+                .get_config_bool(config::Config::Socks5Enabled)
+                .await
+                .unwrap_or_default();
+            match provider::get_provider_info(arg1, socks5_enabled).await {
                 Some(info) => {
                     println!("Information for provider belonging to {}:", arg1);
                     println!("status: {}", info.status as u32);

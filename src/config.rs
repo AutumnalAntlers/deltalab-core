@@ -1,4 +1,4 @@
-//! # Key-value configuration management
+//! # Key-value configuration management.
 
 use anyhow::Result;
 use strum::{EnumProperty, IntoEnumIterator};
@@ -47,6 +47,12 @@ pub enum Config {
     SendSecurity,
     SmtpCertificateChecks,
     ServerFlags,
+
+    Socks5Enabled,
+    Socks5Host,
+    Socks5Port,
+    Socks5User,
+    Socks5Password,
 
     Displayname,
     Selfstatus,
