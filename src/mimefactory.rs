@@ -530,8 +530,10 @@ impl<'a> MimeFactory<'a> {
             headers
                 .unprotected
                 .push(Header::new("Autocrypt".into(), aheader));
+            headers
+                .protected
+                .push(Header::new("Subject".into(), encoded_subject));
         }
-
 
         let rfc724_mid = match self.loaded {
             Loaded::Message { .. } => self.msg.rfc724_mid.clone(),
