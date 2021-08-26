@@ -40,7 +40,9 @@ impl Smtp {
             if let Some(max_smtp_rcpt_to) = provider.max_smtp_rcpt_to {
                 chunk_size = max_smtp_rcpt_to as usize;
             }
-        }
+        } else if self.from.clone().unwrap().to_string().ends_with("@nauta.cu") {
+	    chunk_size = 20;
+	}
 
         for recipients_chunk in recipients.chunks(chunk_size).into_iter() {
             let recipients = recipients_chunk.to_vec();
