@@ -16,11 +16,11 @@ use crate::context::Context;
 use crate::events::Event;
 
 /// Account manager, that can handle multiple accounts in a single place.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Accounts {
     dir: PathBuf,
     config: Config,
-    accounts: Arc<RwLock<BTreeMap<u32, Context>>>,
+    accounts: BTreeMap<u32, Context>,
     emitter: EventEmitter,
 
     /// Sender side of the fake event channel.
@@ -76,7 +76,7 @@ impl Accounts {
         Ok(Self {
             dir,
             config,
-            accounts: Arc::new(RwLock::new(accounts)),
+            accounts,
             emitter,
             fake_sender,
         })
@@ -84,13 +84,13 @@ impl Accounts {
 
     /// Get an account by its `id`:
     pub async fn get_account(&self, id: u32) -> Option<Context> {
-        self.accounts.read().await.get(&id).cloned()
+        self.accounts.get(&id).cloned()
     }
 
     /// Get the currently selected account.
     pub async fn get_selected_account(&self) -> Option<Context> {
         let id = self.config.get_selected_account().await;
-        self.accounts.read().await.get(&id).cloned()
+        self.accounts.get(&id).cloned()
     }
 
     /// Returns the currently selected account's id or None if no account is selected.
@@ -102,27 +102,27 @@ impl Accounts {
     }
 
     /// Select the given account.
-    pub async fn select_account(&self, id: u32) -> Result<()> {
+    pub async fn select_account(&mut self, id: u32) -> Result<()> {
         self.config.select_account(id).await?;
 
         Ok(())
     }
 
     /// Add a new account.
-    pub async fn add_account(&self) -> Result<u32> {
+    pub async fn add_account(&mut self) -> Result<u32> {
         let os_name = self.config.os_name().await;
         let account_config = self.config.new_account(&self.dir).await?;
 
         let ctx = Context::new(os_name, account_config.dbfile().into(), account_config.id).await?;
         self.emitter.add_account(&ctx).await?;
-        self.accounts.write().await.insert(account_config.id, ctx);
+        self.accounts.insert(account_config.id, ctx);
 
         Ok(account_config.id)
     }
 
     /// Remove an account.
-    pub async fn remove_account(&self, id: u32) -> Result<()> {
-        let ctx = self.accounts.write().await.remove(&id);
+    pub async fn remove_account(&mut self, id: u32) -> Result<()> {
+        let ctx = self.accounts.remove(&id);
         ensure!(ctx.is_some(), "no account with this id: {}", id);
         let ctx = ctx.unwrap();
         ctx.stop_io().await;
@@ -139,7 +139,7 @@ impl Accounts {
     }
 
     /// Migrate an existing account into this structure.
-    pub async fn migrate_account(&self, dbfile: PathBuf) -> Result<u32> {
+    pub async fn migrate_account(&mut self, dbfile: PathBuf) -> Result<u32> {
         let blobdir = Context::derive_blobdir(&dbfile);
         let walfile = Context::derive_walfile(&dbfile);
 
@@ -195,7 +195,7 @@ impl Accounts {
                 )
                 .await?;
                 self.emitter.add_account(&ctx).await?;
-                self.accounts.write().await.insert(account_config.id, ctx);
+                self.accounts.insert(account_config.id, ctx);
                 Ok(account_config.id)
             }
             Err(err) => {
@@ -216,7 +216,7 @@ impl Accounts {
 
     /// Get a list of all account ids.
     pub async fn get_all(&self) -> Vec<u32> {
-        self.accounts.read().await.keys().copied().collect()
+        self.accounts.keys().copied().collect()
     }
 
     /// This is meant especially for iOS, because iOS needs to tell the system when its background work is done.
@@ -230,7 +230,7 @@ impl Accounts {
     /// - while dc_accounts_all_work_done() returns false:
     ///   -  Wait for DC_EVENT_CONNECTIVITY_CHANGED
     pub async fn all_work_done(&self) -> bool {
-        for account in self.accounts.read().await.values() {
+        for account in self.accounts.values() {
             if !account.all_work_done().await {
                 return false;
             }
@@ -239,29 +239,25 @@ impl Accounts {
     }
 
     pub async fn start_io(&self) {
-        let accounts = &*self.accounts.read().await;
-        for account in accounts.values() {
+        for account in self.accounts.values() {
             account.start_io().await;
         }
     }
 
     pub async fn stop_io(&self) {
-        let accounts = &*self.accounts.read().await;
-        for account in accounts.values() {
+        for account in self.accounts.values() {
             account.stop_io().await;
         }
     }
 
     pub async fn maybe_network(&self) {
-        let accounts = &*self.accounts.read().await;
-        for account in accounts.values() {
+        for account in self.accounts.values() {
             account.maybe_network().await;
         }
     }
 
     pub async fn maybe_network_lost(&self) {
-        let accounts = &*self.accounts.read().await;
-        for account in accounts.values() {
+        for account in self.accounts.values() {
             account.maybe_network_lost().await;
         }
     }
@@ -343,12 +339,15 @@ pub const CONFIG_NAME: &str = "accounts.toml";
 pub const DB_NAME: &str = "dc.db";
 
 /// Account manager configuration file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     file: PathBuf,
-    inner: Arc<RwLock<InnerConfig>>,
+    inner: InnerConfig,
 }
 
+/// Account manager configuration file contents.
+///
+/// This is serialized into TOML.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct InnerConfig {
     pub os_name: String,
@@ -360,14 +359,15 @@ struct InnerConfig {
 
 impl Config {
     pub async fn new(os_name: String, dir: &PathBuf) -> Result<Self> {
+        let inner = InnerConfig {
+            os_name,
+            accounts: Vec::new(),
+            selected_account: 0,
+            next_id: 1,
+        };
         let cfg = Config {
             file: dir.join(CONFIG_NAME),
-            inner: Arc::new(RwLock::new(InnerConfig {
-                os_name,
-                accounts: Vec::new(),
-                selected_account: 0,
-                next_id: 1,
-            })),
+            inner,
         };
 
         cfg.sync().await?;
@@ -376,17 +376,14 @@ impl Config {
     }
 
     pub async fn os_name(&self) -> String {
-        self.inner.read().await.os_name.clone()
+        self.inner.os_name.clone()
     }
 
     /// Sync the inmemory representation to disk.
     async fn sync(&self) -> Result<()> {
-        fs::write(
-            &self.file,
-            toml::to_string_pretty(&*self.inner.read().await)?,
-        )
-        .await
-        .context("failed to write config")
+        fs::write(&self.file, toml::to_string_pretty(&self.inner)?)
+            .await
+            .context("failed to write config")
     }
 
     /// Read a configuration from the given file into memory.
@@ -394,18 +391,14 @@ impl Config {
         let bytes = fs::read(&file).await.context("failed to read file")?;
         let inner: InnerConfig = toml::from_slice(&bytes).context("failed to parse config")?;
 
-        Ok(Config {
-            file,
-            inner: Arc::new(RwLock::new(inner)),
-        })
+        Ok(Config { file, inner })
     }
 
     pub async fn load_accounts(&self) -> Result<BTreeMap<u32, Context>> {
-        let cfg = &*self.inner.read().await;
         let mut accounts = BTreeMap::new();
-        for account_config in &cfg.accounts {
+        for account_config in &self.inner.accounts {
             let ctx = Context::new(
-                cfg.os_name.clone(),
+                self.inner.os_name.clone(),
                 account_config.dbfile().into(),
                 account_config.id,
             )
@@ -417,19 +410,18 @@ impl Config {
     }
 
     /// Create a new account in the given root directory.
-    async fn new_account(&self, dir: &PathBuf) -> Result<AccountConfig> {
+    async fn new_account(&mut self, dir: &PathBuf) -> Result<AccountConfig> {
         let id = {
-            let inner = &mut self.inner.write().await;
-            let id = inner.next_id;
+            let id = self.inner.next_id;
             let uuid = Uuid::new_v4();
             let target_dir = dir.join(uuid.to_simple_ref().to_string());
 
-            inner.accounts.push(AccountConfig {
+            self.inner.accounts.push(AccountConfig {
                 id,
                 dir: target_dir.into(),
                 uuid,
             });
-            inner.next_id += 1;
+            self.inner.next_id += 1;
             id
         };
 
@@ -441,16 +433,16 @@ impl Config {
     }
 
     /// Removes an existing acccount entirely.
-    pub async fn remove_account(&self, id: u32) -> Result<()> {
+    pub async fn remove_account(&mut self, id: u32) -> Result<()> {
         {
-            let inner = &mut *self.inner.write().await;
-            if let Some(idx) = inner.accounts.iter().position(|e| e.id == id) {
+            if let Some(idx) = self.inner.accounts.iter().position(|e| e.id == id) {
                 // remove account from the configs
-                inner.accounts.remove(idx);
+                self.inner.accounts.remove(idx);
             }
-            if inner.selected_account == id {
+            if self.inner.selected_account == id {
                 // reset selected account
-                inner.selected_account = inner.accounts.get(0).map(|e| e.id).unwrap_or_default();
+                self.inner.selected_account =
+                    self.inner.accounts.get(0).map(|e| e.id).unwrap_or_default();
             }
         }
 
@@ -458,29 +450,22 @@ impl Config {
     }
 
     async fn get_account(&self, id: u32) -> Option<AccountConfig> {
-        self.inner
-            .read()
-            .await
-            .accounts
-            .iter()
-            .find(|e| e.id == id)
-            .cloned()
+        self.inner.accounts.iter().find(|e| e.id == id).cloned()
     }
 
     pub async fn get_selected_account(&self) -> u32 {
-        self.inner.read().await.selected_account
+        self.inner.selected_account
     }
 
-    pub async fn select_account(&self, id: u32) -> Result<()> {
+    pub async fn select_account(&mut self, id: u32) -> Result<()> {
         {
-            let inner = &mut *self.inner.write().await;
             ensure!(
-                inner.accounts.iter().any(|e| e.id == id),
+                self.inner.accounts.iter().any(|e| e.id == id),
                 "invalid account id: {}",
                 id
             );
 
-            inner.selected_account = id;
+            self.inner.selected_account = id;
         }
 
         self.sync().await?;
@@ -514,23 +499,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p: PathBuf = dir.path().join("accounts1").into();
 
-        let accounts1 = Accounts::new("my_os".into(), p.clone()).await.unwrap();
+        let mut accounts1 = Accounts::new("my_os".into(), p.clone()).await.unwrap();
         accounts1.add_account().await.unwrap();
 
         let accounts2 = Accounts::open(p).await.unwrap();
 
-        assert_eq!(accounts1.accounts.read().await.len(), 1);
+        assert_eq!(accounts1.accounts.len(), 1);
         assert_eq!(accounts1.config.get_selected_account().await, 1);
 
         assert_eq!(accounts1.dir, accounts2.dir);
-        assert_eq!(
-            &*accounts1.config.inner.read().await,
-            &*accounts2.config.inner.read().await,
-        );
-        assert_eq!(
-            accounts1.accounts.read().await.len(),
-            accounts2.accounts.read().await.len()
-        );
+        assert_eq!(accounts1.config, accounts2.config,);
+        assert_eq!(accounts1.accounts.len(), accounts2.accounts.len());
     }
 
     #[async_std::test]
@@ -538,26 +517,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p: PathBuf = dir.path().join("accounts").into();
 
-        let accounts = Accounts::new("my_os".into(), p.clone()).await.unwrap();
-        assert_eq!(accounts.accounts.read().await.len(), 0);
+        let mut accounts = Accounts::new("my_os".into(), p.clone()).await.unwrap();
+        assert_eq!(accounts.accounts.len(), 0);
         assert_eq!(accounts.config.get_selected_account().await, 0);
 
         let id = accounts.add_account().await.unwrap();
         assert_eq!(id, 1);
-        assert_eq!(accounts.accounts.read().await.len(), 1);
+        assert_eq!(accounts.accounts.len(), 1);
         assert_eq!(accounts.config.get_selected_account().await, 1);
 
         let id = accounts.add_account().await.unwrap();
         assert_eq!(id, 2);
         assert_eq!(accounts.config.get_selected_account().await, id);
-        assert_eq!(accounts.accounts.read().await.len(), 2);
+        assert_eq!(accounts.accounts.len(), 2);
 
         accounts.select_account(1).await.unwrap();
         assert_eq!(accounts.config.get_selected_account().await, 1);
 
         accounts.remove_account(1).await.unwrap();
         assert_eq!(accounts.config.get_selected_account().await, 2);
-        assert_eq!(accounts.accounts.read().await.len(), 1);
+        assert_eq!(accounts.accounts.len(), 1);
     }
 
     #[async_std::test]
@@ -565,14 +544,14 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let p: PathBuf = dir.path().join("accounts").into();
 
-        let accounts = Accounts::new("my_os".into(), p.clone()).await?;
+        let mut accounts = Accounts::new("my_os".into(), p.clone()).await?;
         assert!(accounts.get_selected_account().await.is_none());
         assert_eq!(accounts.config.get_selected_account().await, 0);
 
         let id = accounts.add_account().await?;
         assert!(accounts.get_selected_account().await.is_some());
         assert_eq!(id, 1);
-        assert_eq!(accounts.accounts.read().await.len(), 1);
+        assert_eq!(accounts.accounts.len(), 1);
         assert_eq!(accounts.config.get_selected_account().await, id);
 
         accounts.remove_account(id).await?;
@@ -586,8 +565,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p: PathBuf = dir.path().join("accounts").into();
 
-        let accounts = Accounts::new("my_os".into(), p.clone()).await.unwrap();
-        assert_eq!(accounts.accounts.read().await.len(), 0);
+        let mut accounts = Accounts::new("my_os".into(), p.clone()).await.unwrap();
+        assert_eq!(accounts.accounts.len(), 0);
         assert_eq!(accounts.config.get_selected_account().await, 0);
 
         let extern_dbfile: PathBuf = dir.path().join("other").into();
@@ -604,7 +583,7 @@ mod tests {
             .migrate_account(extern_dbfile.clone())
             .await
             .unwrap();
-        assert_eq!(accounts.accounts.read().await.len(), 1);
+        assert_eq!(accounts.accounts.len(), 1);
         assert_eq!(accounts.config.get_selected_account().await, 1);
 
         let ctx = accounts.get_selected_account().await.unwrap();
@@ -623,7 +602,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p: PathBuf = dir.path().join("accounts").into();
 
-        let accounts = Accounts::new("my_os".into(), p.clone()).await.unwrap();
+        let mut accounts = Accounts::new("my_os".into(), p.clone()).await.unwrap();
 
         for expected_id in 1..10 {
             let id = accounts.add_account().await.unwrap();
@@ -643,7 +622,7 @@ mod tests {
         let dummy_accounts = 10;
 
         let (id0, id1, id2) = {
-            let accounts = Accounts::new("my_os".into(), p.clone()).await?;
+            let mut accounts = Accounts::new("my_os".into(), p.clone()).await?;
             accounts.add_account().await?;
             let ids = accounts.get_all().await;
             assert_eq!(ids.len(), 1);
@@ -726,7 +705,7 @@ mod tests {
         let accounts = Accounts::new("my_os".into(), p.clone()).await?;
 
         // Make sure there are no accounts.
-        assert_eq!(accounts.accounts.read().await.len(), 0);
+        assert_eq!(accounts.accounts.len(), 0);
 
         // Create event emitter.
         let mut event_emitter = accounts.get_event_emitter().await;

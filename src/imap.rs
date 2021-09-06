@@ -228,7 +228,11 @@ impl Imap {
             param.socks5_config.clone(),
             &param.addr,
             param.server_flags & DC_LP_AUTH_OAUTH2 != 0,
-            param.provider.map_or(false, |provider| provider.strict_tls),
+            param
+                .provider
+                .map_or(param.socks5_config.is_some(), |provider| {
+                    provider.strict_tls
+                }),
             idle_interrupt,
         )
         .await?;
@@ -346,10 +350,10 @@ impl Imap {
                 self.connected = true;
                 self.session = Some(session);
                 self.login_failed_once = false;
-                emit_event!(
-                    context,
-                    EventType::ImapConnected(format!("IMAP-LOGIN as {}", self.config.lp.user))
-                );
+                context.emit_event(EventType::ImapConnected(format!(
+                    "IMAP-LOGIN as {}",
+                    self.config.lp.user
+                )));
                 Ok(())
             }
 
@@ -583,7 +587,7 @@ impl Imap {
                         folder, old_uid_next, uid_next, new_uid_validity,
                     );
                     set_uid_next(context, folder, uid_next).await?;
-                    job::schedule_resync(context).await;
+                    job::schedule_resync(context).await?;
                 }
                 uid_next != old_uid_next // If uid_next changed, there are new emails
             } else {
@@ -636,7 +640,7 @@ impl Imap {
         set_uid_next(context, folder, new_uid_next).await?;
         set_uidvalidity(context, folder, new_uid_validity).await?;
         if old_uid_validity != 0 || old_uid_next != 0 {
-            job::schedule_resync(context).await;
+            job::schedule_resync(context).await?;
         }
         info!(
             context,
@@ -1011,13 +1015,10 @@ impl Imap {
             if let Some(ref mut session) = &mut self.session {
                 match session.uid_mv(&set, &dest_folder).await {
                     Ok(_) => {
-                        emit_event!(
-                            context,
-                            EventType::ImapMessageMoved(format!(
-                                "IMAP Message {} moved to {}",
-                                display_folder_id, dest_folder
-                            ))
-                        );
+                        context.emit_event(EventType::ImapMessageMoved(format!(
+                            "IMAP Message {} moved to {}",
+                            display_folder_id, dest_folder
+                        )));
                         return ImapActionResult::Success;
                     }
                     Err(err) => {
@@ -1055,23 +1056,17 @@ impl Imap {
 
         if !self.add_flag_finalized(context, uid, "\\Deleted").await {
             warn!(context, "Cannot mark {} as \"Deleted\" after copy.", uid);
-            emit_event!(
-                context,
-                EventType::ImapMessageMoved(format!(
-                    "IMAP Message {} copied to {} (delete FAILED)",
-                    display_folder_id, dest_folder
-                ))
-            );
+            context.emit_event(EventType::ImapMessageMoved(format!(
+                "IMAP Message {} copied to {} (delete FAILED)",
+                display_folder_id, dest_folder
+            )));
             ImapActionResult::Failed
         } else {
             self.config.selected_folder_needs_expunge = true;
-            emit_event!(
-                context,
-                EventType::ImapMessageMoved(format!(
-                    "IMAP Message {} copied to {} (delete successfull)",
-                    display_folder_id, dest_folder
-                ))
-            );
+            context.emit_event(EventType::ImapMessageMoved(format!(
+                "IMAP Message {} copied to {} (delete successfull)",
+                display_folder_id, dest_folder
+            )));
             ImapActionResult::Success
         }
     }
@@ -1265,13 +1260,10 @@ impl Imap {
             );
             ImapActionResult::RetryLater
         } else {
-            emit_event!(
-                context,
-                EventType::ImapMessageDeleted(format!(
-                    "IMAP Message {} marked as deleted [{}]",
-                    display_imap_id, message_id
-                ))
-            );
+            context.emit_event(EventType::ImapMessageDeleted(format!(
+                "IMAP Message {} marked as deleted [{}]",
+                display_imap_id, message_id
+            )));
             self.config.selected_folder_needs_expunge = true;
             ImapActionResult::Success
         }

@@ -183,7 +183,7 @@ impl ChatId {
                     || contact_id == DC_CONTACT_ID_SELF
                 {
                     let chat_id = ChatId::get_for_contact(context, contact_id).await?;
-                    Contact::scaleup_origin_by_id(context, contact_id, Origin::CreateChat).await;
+                    Contact::scaleup_origin_by_id(context, contact_id, Origin::CreateChat).await?;
                     chat_id
                 } else {
                     warn!(
@@ -284,7 +284,7 @@ impl ChatId {
                 for contact_id in get_chat_contacts(context, self).await? {
                     if contact_id != DC_CONTACT_ID_SELF {
                         Contact::scaleup_origin_by_id(context, contact_id, Origin::CreateChat)
-                            .await;
+                            .await?;
                     }
                 }
             }
@@ -497,7 +497,7 @@ impl ChatId {
             chat_id: ChatId::new(0),
         });
 
-        job::kill_action(context, Action::Housekeeping).await;
+        job::kill_action(context, Action::Housekeeping).await?;
         let j = job::Job::new(Action::Housekeeping, 0, Params::new(), 10);
         job::add(context, j).await;
 
@@ -1099,10 +1099,9 @@ impl Chat {
         if self.typ == Chattype::Group
             && !is_contact_in_chat(context, self.id, DC_CONTACT_ID_SELF).await
         {
-            emit_event!(
-                context,
-                EventType::ErrorSelfNotInGroup("Cannot send message; self not in group.".into())
-            );
+            context.emit_event(EventType::ErrorSelfNotInGroup(
+                "Cannot send message; self not in group.".into(),
+            ));
             bail!("Cannot set message; self not in group.");
         }
 
@@ -2273,12 +2272,9 @@ pub(crate) async fn add_contact_to_chat_ex(
 
     if !is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await {
         /* we should respect this - whatever we send to the group, it gets discarded anyway! */
-        emit_event!(
-            context,
-            EventType::ErrorSelfNotInGroup(
-                "Cannot add contact to group; self not in group.".into()
-            )
-        );
+        context.emit_event(EventType::ErrorSelfNotInGroup(
+            "Cannot add contact to group; self not in group.".into(),
+        ));
         bail!("can not add contact because our account is not part of it");
     }
     if from_handshake && chat.param.get_int(Param::Unpromoted).unwrap_or_default() == 1 {
@@ -2450,19 +2446,15 @@ impl rusqlite::types::FromSql for MuteDuration {
 
 pub async fn set_muted(context: &Context, chat_id: ChatId, duration: MuteDuration) -> Result<()> {
     ensure!(!chat_id.is_special(), "Invalid chat ID");
-    if context
+    context
         .sql
         .execute(
             "UPDATE chats SET muted_until=? WHERE id=?;",
             paramsv![duration, chat_id],
         )
         .await
-        .is_ok()
-    {
-        context.emit_event(EventType::ChatModified(chat_id));
-    } else {
-        bail!("Failed to set mute duration, chat might not exist -");
-    }
+        .context(format!("Failed to set mute duration for {}", chat_id))?;
+    context.emit_event(EventType::ChatModified(chat_id));
     Ok(())
 }
 
@@ -2489,12 +2481,9 @@ pub async fn remove_contact_from_chat(
     if let Ok(chat) = Chat::load_from_db(context, chat_id).await {
         if chat.typ == Chattype::Group {
             if !is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await {
-                emit_event!(
-                    context,
-                    EventType::ErrorSelfNotInGroup(
-                        "Cannot remove contact from chat; self not in group.".into()
-                    )
-                );
+                context.emit_event(EventType::ErrorSelfNotInGroup(
+                    "Cannot remove contact from chat; self not in group.".into(),
+                ));
             } else {
                 if let Ok(contact) = Contact::get_by_id(context, contact_id).await {
                     if chat.is_promoted() {
@@ -2586,10 +2575,9 @@ pub async fn set_chat_name(context: &Context, chat_id: ChatId, new_name: &str) -
         if chat.name == new_name {
             success = true;
         } else if !is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await {
-            emit_event!(
-                context,
-                EventType::ErrorSelfNotInGroup("Cannot set chat name; self not in group".into())
-            );
+            context.emit_event(EventType::ErrorSelfNotInGroup(
+                "Cannot set chat name; self not in group".into(),
+            ));
         } else {
             /* we should respect this - whatever we send to the group, it gets discarded anyway! */
             if context
@@ -2653,12 +2641,9 @@ pub async fn set_chat_profile_image(
     );
     /* we should respect this - whatever we send to the group, it gets discarded anyway! */
     if !is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await {
-        emit_event!(
-            context,
-            EventType::ErrorSelfNotInGroup(
-                "Cannot set chat profile image; self not in group.".into()
-            )
-        );
+        context.emit_event(EventType::ErrorSelfNotInGroup(
+            "Cannot set chat profile image; self not in group.".into(),
+        ));
         bail!("Failed to set profile image");
     }
     let mut msg = Message::new(Viewtype::Text);
@@ -2686,15 +2671,12 @@ pub async fn set_chat_profile_image(
     chat.update_param(context).await?;
     if chat.is_promoted() && !chat.is_mailing_list() {
         msg.id = send_msg(context, chat_id, &mut msg).await?;
-        emit_event!(
-            context,
-            EventType::MsgsChanged {
-                chat_id,
-                msg_id: msg.id
-            }
-        );
+        context.emit_event(EventType::MsgsChanged {
+            chat_id,
+            msg_id: msg.id,
+        });
     }
-    emit_event!(context, EventType::ChatModified(chat_id));
+    context.emit_event(EventType::ChatModified(chat_id));
     Ok(())
 }
 
@@ -3252,7 +3234,9 @@ mod tests {
         assert!(chat.get_profile_image(&t).await.unwrap().is_some());
 
         // delete device message, make sure it is not added again
-        message::delete_msgs(&t, &[*msg1_id.as_ref().unwrap()]).await;
+        message::delete_msgs(&t, &[*msg1_id.as_ref().unwrap()])
+            .await
+            .unwrap();
         let msg1 = message::Message::load_from_db(&t, *msg1_id.as_ref().unwrap()).await;
         assert!(msg1.is_err() || msg1.unwrap().chat_id.is_trash());
         let msg3_id = add_device_msg(&t, Some("any-label"), Some(&mut msg2)).await;
