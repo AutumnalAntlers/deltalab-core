@@ -103,6 +103,12 @@ pub enum Action {
     MoveMsg = 200,
     DeleteMsgOnImap = 210,
 
+    // This job will download partially downloaded messages completely
+    // and is added when download_full() is called.
+    // Most messages are downloaded automatically on fetch
+    // and do not go through this job.
+    DownloadMsg = 250,
+
     // UID synchronization is high-priority to make sure correct UIDs
     // are used by message moving/deletion.
     ResyncFolders = 300,
@@ -134,6 +140,7 @@ impl From<Action> for Thread {
             MarkseenMsgOnImap => Thread::Imap,
             MoveMsg => Thread::Imap,
             UpdateRecentQuota => Thread::Imap,
+            DownloadMsg => Thread::Imap,
 
             MaybeSendLocations => Thread::Smtp,
             MaybeSendLocationsEnded => Thread::Smtp,
@@ -1159,6 +1166,7 @@ async fn perform_job_action(
             Ok(status) => status,
             Err(err) => Status::Finished(Err(err)),
         },
+        Action::DownloadMsg => job.download_msg(context, connection.inbox()).await,
     };
 
     info!(context, "Finished immediate try {} of job {}", tries, job);
@@ -1223,7 +1231,8 @@ pub async fn add(context: &Context, job: Job) {
             | Action::MarkseenMsgOnImap
             | Action::FetchExistingMsgs
             | Action::MoveMsg
-            | Action::UpdateRecentQuota => {
+            | Action::UpdateRecentQuota
+            | Action::DownloadMsg => {
                 info!(context, "interrupt: imap");
                 context
                     .interrupt_inbox(InterruptInfo::new(false, None))

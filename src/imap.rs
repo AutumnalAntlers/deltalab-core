@@ -65,7 +65,7 @@ pub enum ImapActionResult {
 /// - Chat-Version to check if a message is a chat message
 /// - Autocrypt-Setup-Message to check if a message is an autocrypt setup message,
 ///   not necessarily sent by Delta Chat.
-const PREFETCH_FLAGS: &str = "(UID BODY.PEEK[HEADER.FIELDS (\
+const PREFETCH_FLAGS: &str = "(UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (\
                               MESSAGE-ID \
                               FROM \
                               IN-REPLY-TO REFERENCES \
@@ -81,14 +81,14 @@ const RFC724MID_UID: &str = "(UID BODY.PEEK[HEADER.FIELDS (\
                              X-MICROSOFT-ORIGINAL-MESSAGE-ID\
                              )])";
 const JUST_UID: &str = "(UID)";
-const BODY_FLAGS: &str = "(FLAGS BODY.PEEK[])";
+const BODY_FULL: &str = "(FLAGS BODY.PEEK[])";
+const BODY_PARTIAL: &str = "(FLAGS RFC822.SIZE BODY.PEEK[HEADER])";
 
 #[derive(Debug)]
 pub struct Imap {
     idle_interrupt: Receiver<InterruptInfo>,
     config: ImapConfig,
     session: Option<Session>,
-    connected: bool,
     interrupt: Option<stop_token::StopSource>,
     should_reconnect: bool,
     login_failed_once: bool,
@@ -200,7 +200,6 @@ impl Imap {
             idle_interrupt,
             config,
             session: None,
-            connected: false,
             interrupt: None,
             should_reconnect: false,
             login_failed_once: false,
@@ -254,7 +253,7 @@ impl Imap {
         if self.should_reconnect() {
             self.disconnect(context).await;
             self.should_reconnect = false;
-        } else if self.is_connected() {
+        } else if self.session.is_some() {
             return Ok(());
         }
 
@@ -347,7 +346,6 @@ impl Imap {
         match login_res {
             Ok(session) => {
                 // needs to be set here to ensure it is set on reconnects.
-                self.connected = true;
                 self.session = Some(session);
                 self.login_failed_once = false;
                 context.emit_event(EventType::ImapConnected(format!(
@@ -442,14 +440,9 @@ impl Imap {
                 warn!(context, "failed to logout: {:?}", err);
             }
         }
-        self.connected = false;
         self.capabilities_determined = false;
         self.config.selected_folder = None;
         self.config.selected_mailbox = None;
-    }
-
-    pub fn is_connected(&self) -> bool {
-        self.connected
     }
 
     pub fn should_reconnect(&self) -> bool {
@@ -662,6 +655,7 @@ impl Imap {
     ) -> Result<bool> {
         let show_emails = ShowEmails::from_i32(context.get_config_int(Config::ShowEmails).await?)
             .unwrap_or_default();
+        let download_limit = context.download_limit().await?;
 
         let new_emails = self
             .select_with_uidvalidity(context, folder.as_ref())
@@ -683,7 +677,8 @@ impl Imap {
         let folder: &str = folder.as_ref();
 
         let mut read_errors = 0;
-        let mut uids = Vec::with_capacity(msgs.len());
+        let mut uids_fetch_fully = Vec::with_capacity(msgs.len());
+        let mut uids_fetch_partially = Vec::with_capacity(msgs.len());
         let mut largest_uid_skipped = None;
 
         for (current_uid, msg) in msgs.into_iter() {
@@ -710,7 +705,16 @@ impl Imap {
             )
             .await
             {
-                uids.push(current_uid);
+                match download_limit {
+                    Some(download_limit) => {
+                        if msg.size.unwrap_or_default() > download_limit {
+                            uids_fetch_partially.push(current_uid);
+                        } else {
+                            uids_fetch_fully.push(current_uid)
+                        }
+                    }
+                    None => uids_fetch_fully.push(current_uid),
+                }
             } else if read_errors == 0 {
                 // If there were errors (`read_errors != 0`), stop updating largest_uid_skipped so that uid_next will
                 // not be updated and we will retry prefetching next time
@@ -718,12 +722,29 @@ impl Imap {
             }
         }
 
-        if !uids.is_empty() {
+        if !uids_fetch_fully.is_empty() || !uids_fetch_partially.is_empty() {
             self.connectivity.set_working(context).await;
         }
 
-        let (largest_uid_processed, error_cnt) = self
-            .fetch_many_msgs(context, folder, uids, fetch_existing_msgs)
+        let (largest_uid_fully_fetched, error_cnt) = self
+            .fetch_many_msgs(
+                context,
+                folder,
+                uids_fetch_fully,
+                false,
+                fetch_existing_msgs,
+            )
+            .await;
+        read_errors += error_cnt;
+
+        let (largest_uid_partially_fetched, error_cnt) = self
+            .fetch_many_msgs(
+                context,
+                folder,
+                uids_fetch_partially,
+                true,
+                fetch_existing_msgs,
+            )
             .await;
         read_errors += error_cnt;
 
@@ -734,7 +755,10 @@ impl Imap {
         // So: Update the uid_next to the largest uid that did NOT recoverably fail. Not perfect because if there was
         // another message afterwards that succeeded, we will not retry. The upside is that we will not retry an infinite amount of times.
         let largest_uid_without_errors = max(
-            largest_uid_processed.unwrap_or(0),
+            max(
+                largest_uid_fully_fetched.unwrap_or(0),
+                largest_uid_partially_fetched.unwrap_or(0),
+            ),
             largest_uid_skipped.unwrap_or(0),
         );
         let new_uid_next = largest_uid_without_errors + 1;
@@ -871,30 +895,25 @@ impl Imap {
     /// Fetches a list of messages by server UID.
     ///
     /// Returns the last uid fetch successfully and an error count.
-    async fn fetch_many_msgs(
+    pub(crate) async fn fetch_many_msgs(
         &mut self,
         context: &Context,
         folder: &str,
         server_uids: Vec<u32>,
+        fetch_partially: bool,
         fetching_existing_messages: bool,
     ) -> (Option<u32>, usize) {
         if server_uids.is_empty() {
             return (None, 0);
         }
 
-        if !self.is_connected() {
-            warn!(context, "Not connected");
-            return (None, server_uids.len());
-        }
-
-        if self.session.is_none() {
-            // we could not get a valid imap session, this should be retried
-            self.trigger_reconnect(context).await;
-            warn!(context, "Could not get IMAP session");
-            return (None, server_uids.len());
-        }
-
-        let session = self.session.as_mut().unwrap();
+        let session = match self.session.as_mut() {
+            Some(session) => session,
+            None => {
+                warn!(context, "Not connected");
+                return (None, server_uids.len());
+            }
+        };
 
         let sets = build_sequence_sets(server_uids.clone());
         let mut read_errors = 0;
@@ -902,7 +921,17 @@ impl Imap {
         let mut last_uid = None;
 
         for set in sets.iter() {
-            let mut msgs = match session.uid_fetch(&set, BODY_FLAGS).await {
+            let mut msgs = match session
+                .uid_fetch(
+                    &set,
+                    if fetch_partially {
+                        BODY_PARTIAL
+                    } else {
+                        BODY_FULL
+                    },
+                )
+                .await
+            {
                 Ok(msgs) => msgs,
                 Err(err) => {
                     // TODO: maybe differentiate between IO and input/parsing problems
@@ -937,7 +966,13 @@ impl Imap {
                 count += 1;
 
                 let is_deleted = msg.flags().any(|flag| flag == Flag::Deleted);
-                if is_deleted || msg.body().is_none() {
+                let (body, partial) = if fetch_partially {
+                    (msg.header(), msg.size) // `BODY.PEEK[HEADER]` goes to header() ...
+                } else {
+                    (msg.body(), None) // ... while `BODY.PEEK[]` goes to body() - and includes header()
+                };
+
+                if is_deleted || body.is_none() {
                     info!(
                         context,
                         "Not processing deleted or empty msg {}", server_uid
@@ -951,7 +986,7 @@ impl Imap {
                 let folder = folder.clone();
 
                 // safe, as we checked above that there is a body.
-                let body = msg.body().unwrap();
+                let body = body.unwrap();
                 let is_seen = msg.flags().any(|flag| flag == Flag::Seen);
 
                 match dc_receive_imf_inner(
@@ -960,6 +995,7 @@ impl Imap {
                     &folder,
                     server_uid,
                     is_seen,
+                    partial,
                     fetching_existing_messages,
                 )
                 .await
@@ -1123,7 +1159,7 @@ impl Imap {
         if uid == 0 {
             return Some(ImapActionResult::RetryLater);
         }
-        if !self.is_connected() {
+        if self.session.is_none() {
             // currently jobs are only performed on the INBOX thread
             // TODO: make INBOX/SENT/MVBOX perform the jobs on their
             // respective folders to avoid select_folder network traffic
@@ -1283,115 +1319,114 @@ impl Imap {
     }
 
     pub async fn configure_folders(&mut self, context: &Context, create_mvbox: bool) -> Result<()> {
-        if !self.is_connected() {
-            bail!("IMAP No Connection established");
-        }
+        let session = match self.session {
+            Some(ref mut session) => session,
+            None => bail!("no IMAP connection established"),
+        };
 
-        if let Some(ref mut session) = &mut self.session {
-            let mut folders = match session.list(Some(""), Some("*")).await {
-                Ok(f) => f,
-                Err(err) => {
-                    bail!("list_folders failed: {}", err);
-                }
-            };
+        let mut folders = match session.list(Some(""), Some("*")).await {
+            Ok(f) => f,
+            Err(err) => {
+                bail!("list_folders failed: {}", err);
+            }
+        };
 
-            let mut delimiter = ".".to_string();
-            let mut delimiter_is_default = true;
-            let mut mvbox_folder = None;
-            let mut folder_configs = BTreeMap::new();
-            let mut fallback_folder = get_fallback_folder(&delimiter);
+        let mut delimiter = ".".to_string();
+        let mut delimiter_is_default = true;
+        let mut mvbox_folder = None;
+        let mut folder_configs = BTreeMap::new();
+        let mut fallback_folder = get_fallback_folder(&delimiter);
 
-            while let Some(folder) = folders.next().await {
-                let folder = folder?;
-                info!(context, "Scanning folder: {:?}", folder);
+        while let Some(folder) = folders.next().await {
+            let folder = folder?;
+            info!(context, "Scanning folder: {:?}", folder);
 
-                // Update the delimiter iff there is a different one, but only once.
-                if let Some(d) = folder.delimiter() {
-                    if delimiter_is_default && !d.is_empty() && delimiter != d {
-                        delimiter = d.to_string();
-                        fallback_folder = get_fallback_folder(&delimiter);
-                        delimiter_is_default = false;
-                    }
-                }
-
-                let folder_meaning = get_folder_meaning(&folder);
-                let folder_name_meaning = get_folder_meaning_by_name(folder.name());
-                if folder.name() == "DeltaChat" {
-                    // Always takes precedence
-                    mvbox_folder = Some(folder.name().to_string());
-                } else if folder.name() == fallback_folder {
-                    // only set if none has been already set
-                    if mvbox_folder.is_none() {
-                        mvbox_folder = Some(folder.name().to_string());
-                    }
-                } else if let Some(config) = folder_meaning.to_config() {
-                    // Always takes precedence
-                    folder_configs.insert(config, folder.name().to_string());
-                } else if let Some(config) = folder_name_meaning.to_config() {
-                    // only set if none has been already set
-                    folder_configs
-                        .entry(config)
-                        .or_insert_with(|| folder.name().to_string());
+            // Update the delimiter iff there is a different one, but only once.
+            if let Some(d) = folder.delimiter() {
+                if delimiter_is_default && !d.is_empty() && delimiter != d {
+                    delimiter = d.to_string();
+                    fallback_folder = get_fallback_folder(&delimiter);
+                    delimiter_is_default = false;
                 }
             }
-            drop(folders);
 
-            info!(context, "Using \"{}\" as folder-delimiter.", delimiter);
+            let folder_meaning = get_folder_meaning(&folder);
+            let folder_name_meaning = get_folder_meaning_by_name(folder.name());
+            if folder.name() == "DeltaChat" {
+                // Always takes precedence
+                mvbox_folder = Some(folder.name().to_string());
+            } else if folder.name() == fallback_folder {
+                // only set if none has been already set
+                if mvbox_folder.is_none() {
+                    mvbox_folder = Some(folder.name().to_string());
+                }
+            } else if let Some(config) = folder_meaning.to_config() {
+                // Always takes precedence
+                folder_configs.insert(config, folder.name().to_string());
+            } else if let Some(config) = folder_name_meaning.to_config() {
+                // only set if none has been already set
+                folder_configs
+                    .entry(config)
+                    .or_insert_with(|| folder.name().to_string());
+            }
+        }
+        drop(folders);
 
-            if mvbox_folder.is_none() && create_mvbox {
-                info!(context, "Creating MVBOX-folder \"DeltaChat\"...",);
+        info!(context, "Using \"{}\" as folder-delimiter.", delimiter);
 
-                match session.create("DeltaChat").await {
-                    Ok(_) => {
-                        mvbox_folder = Some("DeltaChat".into());
-                        info!(context, "MVBOX-folder created.",);
-                    }
-                    Err(err) => {
-                        warn!(
-                            context,
-                            "Cannot create MVBOX-folder, trying to create INBOX subfolder. ({})",
-                            err
-                        );
+        if mvbox_folder.is_none() && create_mvbox {
+            info!(context, "Creating MVBOX-folder \"DeltaChat\"...",);
 
-                        match session.create(&fallback_folder).await {
-                            Ok(_) => {
-                                mvbox_folder = Some(fallback_folder);
-                                info!(
-                                    context,
-                                    "MVBOX-folder created as INBOX subfolder. ({})", err
-                                );
-                            }
-                            Err(err) => {
-                                warn!(context, "Cannot create MVBOX-folder. ({})", err);
-                            }
+            match session.create("DeltaChat").await {
+                Ok(_) => {
+                    mvbox_folder = Some("DeltaChat".into());
+                    info!(context, "MVBOX-folder created.",);
+                }
+                Err(err) => {
+                    warn!(
+                        context,
+                        "Cannot create MVBOX-folder, trying to create INBOX subfolder. ({})", err
+                    );
+
+                    match session.create(&fallback_folder).await {
+                        Ok(_) => {
+                            mvbox_folder = Some(fallback_folder);
+                            info!(
+                                context,
+                                "MVBOX-folder created as INBOX subfolder. ({})", err
+                            );
+                        }
+                        Err(err) => {
+                            warn!(context, "Cannot create MVBOX-folder. ({})", err);
                         }
                     }
                 }
-                // SUBSCRIBE is needed to make the folder visible to the LSUB command
-                // that may be used by other MUAs to list folders.
-                // for the LIST command, the folder is always visible.
-                if let Some(ref mvbox) = mvbox_folder {
-                    if let Err(err) = session.subscribe(mvbox).await {
-                        warn!(context, "could not subscribe to {:?}: {:?}", mvbox, err);
-                    }
+            }
+            // SUBSCRIBE is needed to make the folder visible to the LSUB command
+            // that may be used by other MUAs to list folders.
+            // for the LIST command, the folder is always visible.
+            if let Some(ref mvbox) = mvbox_folder {
+                if let Err(err) = session.subscribe(mvbox).await {
+                    warn!(context, "could not subscribe to {:?}: {:?}", mvbox, err);
                 }
             }
+        }
+        context
+            .set_config(Config::ConfiguredInboxFolder, Some("INBOX"))
+            .await?;
+        if let Some(ref mvbox_folder) = mvbox_folder {
             context
-                .set_config(Config::ConfiguredInboxFolder, Some("INBOX"))
-                .await?;
-            if let Some(ref mvbox_folder) = mvbox_folder {
-                context
-                    .set_config(Config::ConfiguredMvboxFolder, Some(mvbox_folder))
-                    .await?;
-            }
-            for (config, name) in folder_configs {
-                context.set_config(config, Some(&name)).await?;
-            }
-            context
-                .sql
-                .set_raw_config_int("folders_configured", DC_FOLDERS_CONFIGURED_VERSION)
+                .set_config(Config::ConfiguredMvboxFolder, Some(mvbox_folder))
                 .await?;
         }
+        for (config, name) in folder_configs {
+            context.set_config(config, Some(&name)).await?;
+        }
+        context
+            .sql
+            .set_raw_config_int("folders_configured", DC_FOLDERS_CONFIGURED_VERSION)
+            .await?;
+
         info!(context, "FINISHED configuring IMAP-folders.");
         Ok(())
     }
