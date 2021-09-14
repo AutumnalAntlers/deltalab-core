@@ -173,7 +173,7 @@ pub enum Config {
 
     /// Defines the max. size (in bytes) of messages downloaded automatically.
     /// 0 = no limit.
-    #[strum(props(default = "0"))]
+    #[strum(props(default = "163840"))]
     DownloadLimit,
 }
 
