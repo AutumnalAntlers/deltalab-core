@@ -134,20 +134,30 @@ pub unsafe extern "C" fn dc_set_config(
     }
     let ctx = &*context;
     let key = to_string_lossy(key);
-    match config::Config::from_str(&key) {
-        Ok(key) => block_on(async move {
-            let value = to_opt_string_lossy(value);
-            ctx.set_config(key, value.as_deref())
+    let value = to_opt_string_lossy(value);
+
+    block_on(async move {
+        if key.starts_with("ui.") {
+            ctx.set_ui_config(&key, value.as_deref())
                 .await
                 .with_context(|| format!("Can't set {} to {:?}", key, value))
                 .log_err(ctx, "dc_set_config() failed")
                 .is_ok() as libc::c_int
-        }),
-        Err(_) => {
-            warn!(ctx, "dc_set_config(): invalid key");
-            0
+        } else {
+            match config::Config::from_str(&key) {
+                Ok(key) => ctx
+                    .set_config(key, value.as_deref())
+                    .await
+                    .with_context(|| format!("Can't set {} to {:?}", key, value))
+                    .log_err(ctx, "dc_set_config() failed")
+                    .is_ok() as libc::c_int,
+                Err(_) => {
+                    warn!(ctx, "dc_set_config(): invalid key");
+                    0
+                }
+            }
         }
-    }
+    })
 }
 
 #[no_mangle]
@@ -160,20 +170,33 @@ pub unsafe extern "C" fn dc_get_config(
         return "".strdup();
     }
     let ctx = &*context;
-    match config::Config::from_str(&to_string_lossy(key)) {
-        Ok(key) => block_on(async move {
-            ctx.get_config(key)
+
+    let key = to_string_lossy(key);
+
+    block_on(async move {
+        if key.starts_with("ui.") {
+            ctx.get_ui_config(&key)
                 .await
-                .log_err(ctx, "Can't get config")
+                .log_err(ctx, "Can't get ui-config")
                 .unwrap_or_default()
                 .unwrap_or_default()
                 .strdup()
-        }),
-        Err(_) => {
-            warn!(ctx, "dc_get_config(): invalid key");
-            "".strdup()
+        } else {
+            match config::Config::from_str(&key) {
+                Ok(key) => ctx
+                    .get_config(key)
+                    .await
+                    .log_err(ctx, "Can't get config")
+                    .unwrap_or_default()
+                    .unwrap_or_default()
+                    .strdup(),
+                Err(_) => {
+                    warn!(ctx, "dc_get_config(): invalid key");
+                    "".strdup()
+                }
+            }
         }
-    }
+    })
 }
 
 #[no_mangle]
@@ -1319,8 +1342,13 @@ pub unsafe extern "C" fn dc_is_contact_in_chat(
     }
     let ctx = &*context;
 
-    block_on(async move { chat::is_contact_in_chat(ctx, ChatId::new(chat_id), contact_id).await })
-        .into()
+    block_on(chat::is_contact_in_chat(
+        ctx,
+        ChatId::new(chat_id),
+        contact_id,
+    ))
+    .log_err(ctx, "is_contact_in_chat failed")
+    .unwrap_or_default() as libc::c_int
 }
 
 #[no_mangle]
@@ -1335,9 +1363,13 @@ pub unsafe extern "C" fn dc_add_contact_to_chat(
     }
     let ctx = &*context;
 
-    block_on(async move {
-        chat::add_contact_to_chat(ctx, ChatId::new(chat_id), contact_id).await as libc::c_int
-    })
+    block_on(chat::add_contact_to_chat(
+        ctx,
+        ChatId::new(chat_id),
+        contact_id,
+    ))
+    .log_err(ctx, "Failed to add contact")
+    .is_ok() as libc::c_int
 }
 
 #[no_mangle]
@@ -1352,12 +1384,13 @@ pub unsafe extern "C" fn dc_remove_contact_from_chat(
     }
     let ctx = &*context;
 
-    block_on(async move {
-        chat::remove_contact_from_chat(ctx, ChatId::new(chat_id), contact_id)
-            .await
-            .map(|_| 1)
-            .unwrap_or_log_default(ctx, "Failed to remove contact")
-    })
+    block_on(chat::remove_contact_from_chat(
+        ctx,
+        ChatId::new(chat_id),
+        contact_id,
+    ))
+    .log_err(ctx, "Failed to remove contact")
+    .is_ok() as libc::c_int
 }
 
 #[no_mangle]
@@ -2019,12 +2052,9 @@ pub unsafe extern "C" fn dc_get_securejoin_qr(
         Some(ChatId::new(chat_id))
     };
 
-    block_on(async move {
-        securejoin::dc_get_securejoin_qr(ctx, chat_id)
-            .await
-            .unwrap_or_else(|| "".to_string())
-            .strdup()
-    })
+    block_on(securejoin::dc_get_securejoin_qr(ctx, chat_id))
+        .unwrap_or_else(|_| "".to_string())
+        .strdup()
 }
 
 #[no_mangle]
@@ -2615,8 +2645,10 @@ pub unsafe extern "C" fn dc_chat_can_send(chat: *mut dc_chat_t) -> libc::c_int {
         return 0;
     }
     let ffi_chat = &*chat;
-    let cxt = &*ffi_chat.context;
-    block_on(ffi_chat.chat.can_send(cxt)) as libc::c_int
+    let ctx = &*ffi_chat.context;
+    block_on(ffi_chat.chat.can_send(ctx))
+        .log_err(ctx, "can_send failed")
+        .unwrap_or_default() as libc::c_int
 }
 
 #[no_mangle]
@@ -3502,7 +3534,9 @@ pub unsafe extern "C" fn dc_contact_is_verified(contact: *mut dc_contact_t) -> l
     let ffi_contact = &*contact;
     let ctx = &*ffi_contact.context;
 
-    block_on(async move { ffi_contact.contact.is_verified(ctx).await as libc::c_int })
+    block_on(ffi_contact.contact.is_verified(ctx))
+        .log_err(ctx, "is_verified failed")
+        .unwrap_or_default() as libc::c_int
 }
 
 // dc_lot_t
