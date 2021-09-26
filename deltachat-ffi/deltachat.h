@@ -4993,7 +4993,7 @@ char* dc_event_get_data2_str(dc_event_t* event);
  *
  * @memberof dc_event_t
  * @param event Event object as returned from dc_accounts_get_next_event().
- * @return account-id belonging to the event or 0 for errors.
+ * @return account-id belonging to the event, 0 for account manager errors.
  */
 uint32_t dc_event_get_account_id(dc_event_t* event);
 
@@ -5218,6 +5218,9 @@ void dc_event_unref(dc_event_t* event);
 
 /**
  * Chat ephemeral timer changed.
+ *
+ * @param data1 (int) chat_id
+ * @param data2 (int) Timer value in seconds or 0 for disabled timer
  */
 #define DC_EVENT_CHAT_EPHEMERAL_TIMER_MODIFIED 2021
 
@@ -5899,6 +5902,70 @@ void dc_event_unref(dc_event_t* event);
 ///
 /// `%1$s` will be replaced by human-readable date and time.
 #define DC_STR_DOWNLOAD_AVAILABILITY      100
+
+/// "Incoming Messages"
+///
+/// Used as a headline in the connectivity view.
+#define DC_STR_INCOMING_MESSAGES          103
+
+/// "Outgoing Messages"
+///
+/// Used as a headline in the connectivity view.
+#define DC_STR_OUTGOING_MESSAGES          104
+
+/// "Storage on %1$s"
+///
+/// Used as a headline in the connectivity view.
+///
+/// `%1$s` will be replaced by the domain of the configured email-address.
+#define DC_STR_STORAGE_ON_DOMAIN          105
+
+/// "One moment…"
+///
+/// Used in the connectivity view when some information are not yet there.
+#define DC_STR_ONE_MOMENT                 106
+
+/// "Connected"
+///
+/// Used as status in the connectivity view.
+#define DC_STR_CONNECTED                  107
+
+/// "Connecting…"
+///
+/// Used as status in the connectivity view.
+#define DC_STR_CONNTECTING                108
+
+/// "Updating…"
+///
+/// Used as status in the connectivity view.
+#define DC_STR_UPDATING                   109
+
+/// "Sending…"
+///
+/// Used as status in the connectivity view.
+#define DC_STR_SENDING                    110
+
+/// "Your last message was sent successfully."
+///
+/// Used as status in the connectivity view.
+#define DC_STR_LAST_MSG_SENT_SUCCESSFULLY 111
+
+/// "Error: %1$s"
+///
+/// Used as status in the connectivity view.
+///
+/// `%1$s` will be replaced by a possibly more detailed, typically english, error description.
+#define DC_STR_ERROR                      112
+
+/// "Not supported by your provider."
+///
+/// Used in the connectivity view.
+#define DC_STR_NOT_SUPPORTED_BY_PROVIDER  113
+
+/// "Messages"
+///
+/// Used as a subtitle in quota context; can be plural always.
+#define DC_STR_MESSAGES                   114
 
 /**
  * @}
