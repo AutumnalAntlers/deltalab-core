@@ -25,7 +25,7 @@ use crate::context::Context;
 use crate::dc_tools::{
     dc_create_id, dc_create_outgoing_rfc724_mid, dc_create_smeared_timestamp,
     dc_create_smeared_timestamps, dc_get_abs_path, dc_gm2local_offset, improve_single_line_input,
-    remove_subject_prefix, time, IsNoneOrEmpty,
+    time, IsNoneOrEmpty,
 };
 use crate::ephemeral::{delete_expired_messages, schedule_ephemeral_task, Timer as EphemeralTimer};
 use crate::events::EventType;
@@ -276,7 +276,9 @@ impl ChatId {
         let chat = Chat::load_from_db(context, self).await?;
 
         match chat.typ {
-            Chattype::Undefined => bail!("Can't block chat of undefined chattype"),
+            Chattype::Undefined | Chattype::Broadcast => {
+                bail!("Can't block chat of type {:?}", chat.typ)
+            }
             Chattype::Single => {
                 for contact_id in get_chat_contacts(context, self).await? {
                     if contact_id != DC_CONTACT_ID_SELF {
@@ -316,7 +318,7 @@ impl ChatId {
 
         match chat.typ {
             Chattype::Undefined => bail!("Can't accept chat of undefined chattype"),
-            Chattype::Single | Chattype::Group => {
+            Chattype::Single | Chattype::Group | Chattype::Broadcast => {
                 // User has "created a chat" with all these contacts.
                 //
                 // Previously accepting a chat literally created a chat because unaccepted chats
@@ -360,7 +362,7 @@ impl ChatId {
 
         match protect {
             ProtectionStatus::Protected => match chat.typ {
-                Chattype::Single | Chattype::Group => {
+                Chattype::Single | Chattype::Group | Chattype::Broadcast => {
                     let contact_ids = get_chat_contacts(context, self).await?;
                     for contact_id in contact_ids.into_iter() {
                         let contact = Contact::get_by_id(context, contact_id).await?;
@@ -985,8 +987,18 @@ impl Chat {
             && !self.is_device_talk()
             && !self.is_mailing_list()
             && !self.is_contact_request()
-            && (self.typ == Chattype::Single
-                || is_contact_in_chat(context, self.id, DC_CONTACT_ID_SELF).await?))
+            && self.is_self_in_chat(context).await?)
+    }
+
+    /// Checks if the user is part of a chat
+    /// and has basically the permissions to edit the chat therefore.
+    /// The function does not check if the chat type allows editing of concrete elements.
+    pub(crate) async fn is_self_in_chat(&self, context: &Context) -> Result<bool> {
+        match self.typ {
+            Chattype::Single | Chattype::Broadcast | Chattype::Mailinglist => Ok(true),
+            Chattype::Group => is_contact_in_chat(context, self.id, DC_CONTACT_ID_SELF).await,
+            Chattype::Undefined => Ok(false),
+        }
     }
 
     pub async fn update_param(&mut self, context: &Context) -> Result<()> {
@@ -1028,8 +1040,11 @@ impl Chat {
                     return contact.get_profile_image(context).await;
                 }
             }
+        } else if self.typ == Chattype::Broadcast {
+            if let Ok(image_rel) = get_broadcast_icon(context).await {
+                return Ok(Some(dc_get_abs_path(context, image_rel)));
+            }
         }
-
         Ok(None)
     }
 
@@ -1131,18 +1146,18 @@ impl Chat {
         let mut to_id = 0;
         let mut location_id = 0;
 
-        if !(self.typ == Chattype::Single || self.typ == Chattype::Group) {
-            error!(context, "Cannot send to chat type #{}.", self.typ,);
-            bail!("Cannot set to chat type #{}", self.typ);
-        }
-
-        if self.typ == Chattype::Group
-            && !is_contact_in_chat(context, self.id, DC_CONTACT_ID_SELF).await?
-        {
-            context.emit_event(EventType::ErrorSelfNotInGroup(
-                "Cannot send message; self not in group.".into(),
-            ));
-            bail!("Cannot set message; self not in group.");
+        if !self.can_send(context).await? {
+            if self.typ == Chattype::Group
+                && !is_contact_in_chat(context, self.id, DC_CONTACT_ID_SELF).await?
+            {
+                context.emit_event(EventType::ErrorSelfNotInGroup(
+                    "Cannot send message; self not in group.".into(),
+                ));
+                bail!("Cannot set message; self not in group.");
+            } else {
+                error!(context, "Cannot send to chat type #{}.", self.typ,);
+                bail!("Cannot send to chat type #{}", self.typ);
+            }
         }
 
         let from = context
@@ -1464,6 +1479,21 @@ pub(crate) async fn update_device_icon(context: &Context) -> Result<()> {
         contact.update_param(context).await?;
     }
     Ok(())
+}
+
+pub(crate) async fn get_broadcast_icon(context: &Context) -> Result<String> {
+    if let Some(icon) = context.sql.get_raw_config("icon-broadcast").await? {
+        return Ok(icon);
+    }
+
+    let icon = include_bytes!("../assets/icon-broadcast.png");
+    let blob = BlobObject::create(context, "icon-broadcast.png", icon).await?;
+    let icon = blob.as_name().to_string();
+    context
+        .sql
+        .set_raw_config("icon-broadcast", Some(&icon))
+        .await?;
+    Ok(icon)
 }
 
 async fn update_special_chat_name(context: &Context, contact_id: u32, name: String) -> Result<()> {
@@ -2226,6 +2256,56 @@ pub async fn create_group_chat(
     Ok(chat_id)
 }
 
+/// Finds an unused name for a new broadcast list.
+async fn find_unused_broadcast_list_name(context: &Context) -> Result<String> {
+    let base_name = stock_str::broadcast_list(context).await;
+    for attempt in 1..1000 {
+        let better_name = if attempt > 1 {
+            format!("{} {}", base_name, attempt)
+        } else {
+            base_name.clone()
+        };
+        if !context
+            .sql
+            .exists(
+                "SELECT COUNT(*) FROM chats WHERE type=? AND name=?;",
+                paramsv![Chattype::Broadcast, better_name],
+            )
+            .await?
+        {
+            return Ok(better_name);
+        }
+    }
+    Ok(base_name)
+}
+
+/// Creates a new broadcast list.
+pub async fn create_broadcast_list(context: &Context) -> Result<ChatId> {
+    let chat_name = find_unused_broadcast_list_name(context).await?;
+    let grpid = dc_create_id();
+    let row_id = context
+        .sql
+        .insert(
+            "INSERT INTO chats
+        (type, name, grpid, param, created_timestamp)
+        VALUES(?, ?, ?, \'U=1\', ?);",
+            paramsv![
+                Chattype::Broadcast,
+                chat_name,
+                grpid,
+                dc_create_smeared_timestamp(context).await,
+            ],
+        )
+        .await?;
+    let chat_id = ChatId::new(u32::try_from(row_id)?);
+
+    context.emit_event(EventType::MsgsChanged {
+        msg_id: MsgId::new(0),
+        chat_id: ChatId::new(0),
+    });
+    Ok(chat_id)
+}
+
 /// Adds a contact to the `chats_contacts` table.
 pub(crate) async fn add_to_chat_contacts_table(
     context: &Context,
@@ -2283,8 +2363,8 @@ pub(crate) async fn add_contact_to_chat_ex(
     /*this also makes sure, not contacts are added to special or normal chats*/
     let mut chat = Chat::load_from_db(context, chat_id).await?;
     ensure!(
-        chat.typ == Chattype::Group,
-        "{} is not a group where one can add members",
+        chat.typ == Chattype::Group || chat.typ == Chattype::Broadcast,
+        "{} is not a group/broadcast where one can add members",
         chat_id
     );
     ensure!(
@@ -2293,14 +2373,18 @@ pub(crate) async fn add_contact_to_chat_ex(
         contact_id
     );
     ensure!(!chat.is_mailing_list(), "Mailing lists can't be changed");
+    ensure!(
+        chat.typ != Chattype::Broadcast || contact_id != DC_CONTACT_ID_SELF,
+        "Cannot add SELF to broadcast."
+    );
 
-    if !is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await? {
-        /* we should respect this - whatever we send to the group, it gets discarded anyway! */
+    if !chat.is_self_in_chat(context).await? {
         context.emit_event(EventType::ErrorSelfNotInGroup(
             "Cannot add contact to group; self not in group.".into(),
         ));
         bail!("can not add contact because our account is not part of it");
     }
+
     if from_handshake && chat.param.get_int(Param::Unpromoted).unwrap_or_default() == 1 {
         chat.param.remove(Param::Unpromoted);
         chat.update_param(context).await?;
@@ -2339,7 +2423,7 @@ pub(crate) async fn add_contact_to_chat_ex(
         }
         add_to_chat_contacts_table(context, chat_id, contact_id).await?;
     }
-    if chat.param.get_int(Param::Unpromoted).unwrap_or_default() == 0 {
+    if chat.typ == Chattype::Group && chat.is_promoted() {
         msg.viewtype = Viewtype::Text;
 
         msg.text = Some(
@@ -2504,14 +2588,14 @@ pub async fn remove_contact_from_chat(
     /* we do not check if "contact_id" exists but just delete all records with the id from chats_contacts */
     /* this allows to delete pending references to deleted contacts.  Of course, this should _not_ happen. */
     if let Ok(chat) = Chat::load_from_db(context, chat_id).await {
-        if chat.typ == Chattype::Group {
-            if !is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await? {
+        if chat.typ == Chattype::Group || chat.typ == Chattype::Broadcast {
+            if !chat.is_self_in_chat(context).await? {
                 context.emit_event(EventType::ErrorSelfNotInGroup(
                     "Cannot remove contact from chat; self not in group.".into(),
                 ));
             } else {
                 if let Ok(contact) = Contact::get_by_id(context, contact_id).await {
-                    if chat.is_promoted() {
+                    if chat.typ == Chattype::Group && chat.is_promoted() {
                         msg.viewtype = Viewtype::Text;
                         if contact.id == DC_CONTACT_ID_SELF {
                             set_group_explicitly_left(context, &chat.grpid).await?;
@@ -2598,48 +2682,47 @@ pub async fn set_chat_name(context: &Context, chat_id: ChatId, new_name: &str) -
     let chat = Chat::load_from_db(context, chat_id).await?;
     let mut msg = Message::default();
 
-    if chat.typ == Chattype::Group || chat.typ == Chattype::Mailinglist {
+    if chat.typ == Chattype::Group
+        || chat.typ == Chattype::Mailinglist
+        || chat.typ == Chattype::Broadcast
+    {
         if chat.name == new_name {
             success = true;
-        } else if !is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await? {
+        } else if !chat.is_self_in_chat(context).await? {
             context.emit_event(EventType::ErrorSelfNotInGroup(
                 "Cannot set chat name; self not in group".into(),
             ));
         } else {
-            /* we should respect this - whatever we send to the group, it gets discarded anyway! */
-            if context
+            context
                 .sql
                 .execute(
                     "UPDATE chats SET name=? WHERE id=?;",
                     paramsv![new_name.to_string(), chat_id],
                 )
-                .await
-                .is_ok()
-            {
-                if chat.is_promoted() && !chat.is_mailing_list() {
-                    msg.viewtype = Viewtype::Text;
-                    msg.text = Some(
-                        stock_str::msg_grp_name(
-                            context,
-                            &chat.name,
-                            &new_name,
-                            DC_CONTACT_ID_SELF as u32,
-                        )
-                        .await,
-                    );
-                    msg.param.set_cmd(SystemMessage::GroupNameChanged);
-                    if !chat.name.is_empty() {
-                        msg.param.set(Param::Arg, &chat.name);
-                    }
-                    msg.id = send_msg(context, chat_id, &mut msg).await?;
-                    context.emit_event(EventType::MsgsChanged {
-                        chat_id,
-                        msg_id: msg.id,
-                    });
+                .await?;
+            if chat.is_promoted() && !chat.is_mailing_list() && chat.typ != Chattype::Broadcast {
+                msg.viewtype = Viewtype::Text;
+                msg.text = Some(
+                    stock_str::msg_grp_name(
+                        context,
+                        &chat.name,
+                        &new_name,
+                        DC_CONTACT_ID_SELF as u32,
+                    )
+                    .await,
+                );
+                msg.param.set_cmd(SystemMessage::GroupNameChanged);
+                if !chat.name.is_empty() {
+                    msg.param.set(Param::Arg, &chat.name);
                 }
-                context.emit_event(EventType::ChatModified(chat_id));
-                success = true;
+                msg.id = send_msg(context, chat_id, &mut msg).await?;
+                context.emit_event(EventType::MsgsChanged {
+                    chat_id,
+                    msg_id: msg.id,
+                });
             }
+            context.emit_event(EventType::ChatModified(chat_id));
+            success = true;
         }
     }
 
@@ -2755,7 +2838,8 @@ pub async fn forward_msgs(context: &Context, msg_ids: &[MsgId], chat_id: ChatId)
             msg.param.remove(Param::Cmd);
             msg.param.remove(Param::OverrideSenderDisplayname);
 
-            msg.subject = format!("Fwd: {}", remove_subject_prefix(&msg.subject));
+            // do not leak data as group names; a default subject is generated by mimfactory
+            msg.subject = "".to_string();
 
             let new_msg_id: MsgId;
             if msg.state == MessageState::OutPreparing {
@@ -4182,6 +4266,49 @@ mod tests {
     }
 
     #[async_std::test]
+    async fn test_only_minimal_data_are_forwarded() -> Result<()> {
+        // send a message from Alice to a group with Bob
+        let alice = TestContext::new_alice().await;
+        alice
+            .set_config(Config::Displayname, Some("secretname"))
+            .await?;
+        let bob_id = Contact::create(&alice, "bob", "bob@example.net").await?;
+        let group_id =
+            create_group_chat(&alice, ProtectionStatus::Unprotected, "secretgrpname").await?;
+        add_contact_to_chat(&alice, group_id, bob_id).await?;
+        let mut msg = Message::new(Viewtype::Text);
+        msg.set_text(Some("bla foo".to_owned()));
+        let sent_msg = alice.send_msg(group_id, &mut msg).await;
+        assert!(sent_msg.payload().contains("secretgrpname"));
+        assert!(sent_msg.payload().contains("secretname"));
+        assert!(sent_msg.payload().contains("alice"));
+
+        // Bob forwards that message to Claire -
+        // Claire should not get information about Alice for the original Group
+        let bob = TestContext::new_bob().await;
+        bob.recv_msg(&sent_msg).await;
+        let orig_msg = bob.get_last_msg().await;
+        let claire_id = Contact::create(&bob, "claire", "claire@foo").await?;
+        let single_id = ChatId::create_for_contact(&bob, claire_id).await?;
+        let group_id = create_group_chat(&bob, ProtectionStatus::Unprotected, "group2").await?;
+        add_contact_to_chat(&bob, group_id, claire_id).await?;
+        let broadcast_id = create_broadcast_list(&bob).await?;
+        add_contact_to_chat(&bob, broadcast_id, claire_id).await?;
+        for chat_id in &[single_id, group_id, broadcast_id] {
+            forward_msgs(&bob, &[orig_msg.id], *chat_id).await?;
+            let sent_msg = bob.pop_sent_msg().await;
+            assert!(sent_msg
+                .payload()
+                .contains("---------- Forwarded message ----------"));
+            assert!(!sent_msg.payload().contains("secretgrpname"));
+            assert!(!sent_msg.payload().contains("secretname"));
+            assert!(!sent_msg.payload().contains("alice"));
+        }
+
+        Ok(())
+    }
+
+    #[async_std::test]
     async fn test_can_send_group() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let bob = Contact::create(&alice, "", "bob@f.br").await?;
@@ -4204,6 +4331,51 @@ mod tests {
                 .await?,
             false
         );
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_broadcast() -> Result<()> {
+        // create two context, send two messages so both know the other
+        let alice = TestContext::new_alice().await;
+        let bob = TestContext::new_bob().await;
+
+        let chat_alice = alice.create_chat(&bob).await;
+        send_text_msg(&alice, chat_alice.id, "hi!".to_string()).await?;
+        bob.recv_msg(&alice.pop_sent_msg().await).await;
+
+        let chat_bob = bob.create_chat(&alice).await;
+        send_text_msg(&bob, chat_bob.id, "ho!".to_string()).await?;
+        alice.recv_msg(&bob.pop_sent_msg().await).await;
+        let msg = alice.get_last_msg().await;
+        assert!(msg.get_showpadlock());
+
+        // test broadcast list
+        let broadcast_id = create_broadcast_list(&alice).await?;
+        add_contact_to_chat(
+            &alice,
+            broadcast_id,
+            get_chat_contacts(&alice, chat_bob.id).await?.pop().unwrap(),
+        )
+        .await?;
+        let chat = Chat::load_from_db(&alice, broadcast_id).await?;
+        assert_eq!(chat.typ, Chattype::Broadcast);
+        assert_eq!(chat.name, stock_str::broadcast_list(&alice).await);
+        assert!(!chat.is_self_talk());
+
+        send_text_msg(&alice, broadcast_id, "ola!".to_string()).await?;
+        let msg = alice.get_last_msg().await;
+        assert_eq!(msg.chat_id, chat.id);
+
+        bob.recv_msg(&alice.pop_sent_msg().await).await;
+        let msg = bob.get_last_msg().await;
+        assert_eq!(msg.get_text(), Some("ola!".to_string()));
+        assert!(!msg.get_showpadlock()); // avoid leaking recipients in encryption data
+        let chat = Chat::load_from_db(&bob, msg.chat_id).await?;
+        assert_eq!(chat.typ, Chattype::Single);
+        assert_eq!(chat.id, chat_bob.id);
+        assert!(!chat.is_self_talk());
+
         Ok(())
     }
 }
