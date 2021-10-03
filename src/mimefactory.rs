@@ -168,7 +168,7 @@ impl<'a> MimeFactory<'a> {
                 .await?;
 
             if !msg.is_system_message() && context.get_config_bool(Config::MdnsEnabled).await? {
-                req_mdn = chat.typ != Chattype::Group;
+                req_mdn = true;
             }
         }
         let (in_reply_to, references) = context
@@ -311,7 +311,7 @@ impl<'a> MimeFactory<'a> {
         }
     }
 
-    async fn should_force_plaintext(&self, context: &Context) -> bool {
+    fn should_force_plaintext(&self) -> bool {
         match &self.loaded {
             Loaded::Message { chat } => {
                 if chat.is_protected() {
@@ -325,23 +325,19 @@ impl<'a> MimeFactory<'a> {
                         .param
                         .get_bool(Param::ForcePlaintext)
                         .unwrap_or_default()
-			|| (!context.get_config_bool(Config::E2eeEnabled).await.unwrap_or_default()
-			    && !self.msg.param.get_bool(Param::GuaranteeE2ee).unwrap_or_default())
                 }
             }
             Loaded::Mdn { .. } => true,
         }
     }
 
-    async fn should_skip_autocrypt(&self, context: &Context) -> bool {
+    fn should_skip_autocrypt(&self) -> bool {
         match &self.loaded {
             Loaded::Message { .. } => self
                 .msg
                 .param
                 .get_bool(Param::SkipAutocrypt)
-                .unwrap_or_default()
-		|| (!context.get_config_bool(Config::E2eeEnabled).await.unwrap_or_default()
-		    && !self.msg.param.get_bool(Param::GuaranteeE2ee).unwrap_or_default()),
+                .unwrap_or_default(),
             Loaded::Mdn { .. } => true,
         }
     }
@@ -507,8 +503,8 @@ impl<'a> MimeFactory<'a> {
 
         let min_verified = self.min_verified();
         let grpimage = self.grpimage();
-        let force_plaintext = self.should_force_plaintext(context).await;
-        let skip_autocrypt = self.should_skip_autocrypt(context).await;
+        let force_plaintext = self.should_force_plaintext();
+        let skip_autocrypt = self.should_skip_autocrypt();
         let subject_str = self.subject_str(context).await?;
         let e2ee_guaranteed = self.is_e2ee_guaranteed();
         let encrypt_helper = EncryptHelper::new(context).await?;
@@ -530,10 +526,11 @@ impl<'a> MimeFactory<'a> {
             headers
                 .unprotected
                 .push(Header::new("Autocrypt".into(), aheader));
-            headers
-                .protected
-                .push(Header::new("Subject".into(), encoded_subject));
         }
+
+        headers
+            .protected
+            .push(Header::new("Subject".into(), encoded_subject));
 
         let rfc724_mid = match self.loaded {
             Loaded::Message { .. } => self.msg.rfc724_mid.clone(),
