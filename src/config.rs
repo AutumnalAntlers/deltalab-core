@@ -61,7 +61,7 @@ pub enum Config {
     #[strum(props(default = "0"))]
     BccSelf,
 
-    #[strum(props(default = "0"))]
+    #[strum(props(default = "1"))]
     E2eeEnabled,
 
     #[strum(props(default = "1"))]
