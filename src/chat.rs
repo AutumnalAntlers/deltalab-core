@@ -171,9 +171,20 @@ impl ChatId {
     /// This should be used when **a user action** creates a chat 1:1, it ensures the chat
     /// exists and is unblocked and scales the [`Contact`]'s origin.
     pub async fn create_for_contact(context: &Context, contact_id: u32) -> Result<Self> {
+        ChatId::create_for_contact_with_blocked(context, contact_id, Blocked::Not).await
+    }
+
+    /// Same as `create_for_contact()` with an additional `create_blocked` parameter
+    /// that is used in case the chat does not exist or to unblock existing chats.
+    /// `create_blocked` won't block already unblocked chats again.
+    pub(crate) async fn create_for_contact_with_blocked(
+        context: &Context,
+        contact_id: u32,
+        create_blocked: Blocked,
+    ) -> Result<Self> {
         let chat_id = match ChatIdBlocked::lookup_by_contact(context, contact_id).await? {
             Some(chat) => {
-                if chat.blocked != Blocked::Not {
+                if create_blocked == Blocked::Not && chat.blocked != Blocked::Not {
                     chat.id.unblock(context).await?;
                 }
                 chat.id
@@ -182,7 +193,10 @@ impl ChatId {
                 if Contact::real_exists_by_id(context, contact_id).await?
                     || contact_id == DC_CONTACT_ID_SELF
                 {
-                    let chat_id = ChatId::get_for_contact(context, contact_id).await?;
+                    let chat_id =
+                        ChatIdBlocked::get_for_contact(context, contact_id, create_blocked)
+                            .await
+                            .map(|chat| chat.id)?;
                     Contact::scaleup_origin_by_id(context, contact_id, Origin::CreateChat).await?;
                     chat_id
                 } else {
@@ -295,7 +309,7 @@ impl ChatId {
                 self.delete(context).await?;
             }
             Chattype::Mailinglist => {
-                if self.set_blocked(context, Blocked::Manually).await? {
+                if self.set_blocked(context, Blocked::Yes).await? {
                     context.emit_event(EventType::ChatModified(self));
                 }
             }
@@ -1196,6 +1210,10 @@ impl Chat {
             msg.param.set_int(Param::AttachGroupImage, 1);
             self.param.remove(Param::Unpromoted);
             self.update_param(context).await?;
+            // send_sync_msg() is called (usually) a moment later at Job::send_msg_to_smtp()
+            // when the group-creation message is actually sent though SMTP -
+            // this makes sure, the other devices are aware of grpid that is used in the sync-message.
+            context.sync_qr_code_tokens(Some(self.id)).await?;
         }
 
         // reset encrypt error state eg. for forwarding
@@ -2388,6 +2406,8 @@ pub(crate) async fn add_contact_to_chat_ex(
     if from_handshake && chat.param.get_int(Param::Unpromoted).unwrap_or_default() == 1 {
         chat.param.remove(Param::Unpromoted);
         chat.update_param(context).await?;
+        context.sync_qr_code_tokens(Some(chat_id)).await?;
+        context.send_sync_msg().await?;
     }
     let self_addr = context
         .get_config(Config::ConfiguredAddr)
@@ -3241,7 +3261,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_self_talk() -> Result<()> {
-        let t = TestContext::new().await;
+        let t = TestContext::new_alice().await;
         let chat = &t.get_self_chat().await;
         assert_eq!(DC_CONTACT_ID_SELF, 1);
         assert!(!chat.id.is_special());
@@ -3251,6 +3271,23 @@ mod tests {
         assert!(chat.can_send(&t).await?);
         assert_eq!(chat.name, stock_str::saved_messages(&t).await);
         assert!(chat.get_profile_image(&t).await?.is_some());
+
+        let msg_id = send_text_msg(&t, chat.id, "foo self".to_string()).await?;
+        let msg = Message::load_from_db(&t, msg_id).await?;
+        assert_eq!(msg.from_id, DC_CONTACT_ID_SELF);
+        assert_eq!(msg.to_id, DC_CONTACT_ID_SELF);
+        assert!(msg.get_showpadlock());
+
+        let sent_msg = t.pop_sent_msg().await;
+        let t2 = TestContext::new_alice().await;
+        t2.recv_msg(&sent_msg).await;
+        let chat = &t2.get_self_chat().await;
+        let msg = t2.get_last_msg_in(chat.id).await;
+        assert_eq!(msg.text, Some("foo self".to_string()));
+        assert_eq!(msg.from_id, DC_CONTACT_ID_SELF);
+        assert_eq!(msg.to_id, DC_CONTACT_ID_SELF);
+        assert!(msg.get_showpadlock());
+
         Ok(())
     }
 
@@ -3859,7 +3896,7 @@ mod tests {
 
         // create contact, then blocked chat
         let contact_id = Contact::create(&ctx, "", "claire@foo.de").await.unwrap();
-        let chat_id = ChatIdBlocked::get_for_contact(&ctx, contact_id, Blocked::Manually)
+        let chat_id = ChatIdBlocked::get_for_contact(&ctx, contact_id, Blocked::Yes)
             .await
             .unwrap()
             .id;
@@ -3868,7 +3905,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(chat_id, chat2.id);
-        assert_eq!(chat2.blocked, Blocked::Manually);
+        assert_eq!(chat2.blocked, Blocked::Yes);
 
         // test nonexistent contact
         let found = ChatId::lookup_by_contact(&ctx, 1234).await.unwrap();
@@ -4375,6 +4412,40 @@ mod tests {
         assert_eq!(chat.typ, Chattype::Single);
         assert_eq!(chat.id, chat_bob.id);
         assert!(!chat.is_self_talk());
+
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_create_for_contact_with_blocked() -> Result<()> {
+        let t = TestContext::new().await;
+        let (contact_id, _) =
+            Contact::add_or_lookup(&t, "", "foo@bar.org", Origin::ManuallyCreated).await?;
+
+        // create a blocked chat
+        let chat_id_orig =
+            ChatId::create_for_contact_with_blocked(&t, contact_id, Blocked::Yes).await?;
+        assert!(!chat_id_orig.is_special());
+        let chat = Chat::load_from_db(&t, chat_id_orig).await?;
+        assert_eq!(chat.blocked, Blocked::Yes);
+
+        // repeating the call, the same chat must still be blocked
+        let chat_id = ChatId::create_for_contact_with_blocked(&t, contact_id, Blocked::Yes).await?;
+        assert_eq!(chat_id, chat_id_orig);
+        let chat = Chat::load_from_db(&t, chat_id).await?;
+        assert_eq!(chat.blocked, Blocked::Yes);
+
+        // already created chats are unblocked if requested
+        let chat_id = ChatId::create_for_contact_with_blocked(&t, contact_id, Blocked::Not).await?;
+        assert_eq!(chat_id, chat_id_orig);
+        let chat = Chat::load_from_db(&t, chat_id).await?;
+        assert_eq!(chat.blocked, Blocked::Not);
+
+        // however, already created chats are not re-blocked
+        let chat_id = ChatId::create_for_contact_with_blocked(&t, contact_id, Blocked::Yes).await?;
+        assert_eq!(chat_id, chat_id_orig);
+        let chat = Chat::load_from_db(&t, chat_id).await?;
+        assert_eq!(chat.blocked, Blocked::Not);
 
         Ok(())
     }

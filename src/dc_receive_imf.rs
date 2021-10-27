@@ -233,6 +233,20 @@ pub(crate) async fn dc_receive_imf_inner(
         .await;
     }
 
+    if let Some(ref sync_items) = mime_parser.sync_items {
+        if from_id == DC_CONTACT_ID_SELF {
+            if mime_parser.was_encrypted() {
+                if let Err(err) = context.execute_sync_items(sync_items).await {
+                    warn!(context, "receive_imf cannot execute sync items: {}", err);
+                }
+            } else {
+                warn!(context, "sync items are not encrypted.");
+            }
+        } else {
+            warn!(context, "sync items not sent by self.");
+        }
+    }
+
     if let Some(avatar_action) = &mime_parser.user_avatar {
         if from_id != 0
             && context
@@ -395,7 +409,7 @@ pub async fn from_field_to_contact_id(
 #[allow(clippy::too_many_arguments, clippy::cognitive_complexity)]
 async fn add_parts(
     context: &Context,
-    mut mime_parser: &mut MimeMessage,
+    mime_parser: &mut MimeMessage,
     imf_raw: &[u8],
     incoming: bool,
     incoming_origin: Origin,
@@ -505,7 +519,7 @@ async fn add_parts(
             // try to assign to a chat based on In-Reply-To/References:
 
             if let Some((new_chat_id, new_chat_id_blocked)) =
-                lookup_chat_by_reply(context, &mime_parser, &parent, from_id, to_ids).await?
+                lookup_chat_by_reply(context, mime_parser, &parent, from_id, to_ids).await?
             {
                 chat_id = Some(new_chat_id);
                 chat_id_blocked = new_chat_id_blocked;
@@ -525,7 +539,7 @@ async fn add_parts(
 
             if let Some((new_chat_id, new_chat_id_blocked)) = create_or_lookup_group(
                 context,
-                &mut mime_parser,
+                mime_parser,
                 sent_timestamp,
                 if test_normal_chat.is_none() {
                     allow_creation
@@ -619,7 +633,9 @@ async fn add_parts(
 
         if chat_id.is_none() {
             // try to create a normal chat
-            let create_blocked = if from_id == to_id {
+            let create_blocked = if *hidden {
+                Blocked::Yes
+            } else if from_id == DC_CONTACT_ID_SELF {
                 Blocked::Not
             } else {
                 Blocked::Request
@@ -692,6 +708,10 @@ async fn add_parts(
         state = MessageState::OutDelivered;
         to_id = to_ids.get_index(0).cloned().unwrap_or_default();
 
+        let self_sent = from_id == DC_CONTACT_ID_SELF
+            && to_ids.len() == 1
+            && to_ids.contains(&DC_CONTACT_ID_SELF);
+
         // handshake may mark contacts as verified and must be processed before chats are created
         if mime_parser.get_header(HeaderDef::SecureJoin).is_some() {
             is_dc_message = MessengerMessage::Yes; // avoid discarding by show_emails setting
@@ -710,6 +730,10 @@ async fn add_parts(
                     return Ok(DC_CHAT_ID_TRASH);
                 }
             }
+        } else if mime_parser.sync_items.is_some() && self_sent {
+            is_dc_message = MessengerMessage::Yes;
+            allow_creation = true;
+            *hidden = true;
         }
 
         // If the message is outgoing AND there is no Received header AND it's not in the sentbox,
@@ -744,7 +768,7 @@ async fn add_parts(
             // try to assign to a chat based on In-Reply-To/References:
 
             if let Some((new_chat_id, new_chat_id_blocked)) =
-                lookup_chat_by_reply(context, &mime_parser, &parent, from_id, to_ids).await?
+                lookup_chat_by_reply(context, mime_parser, &parent, from_id, to_ids).await?
             {
                 chat_id = Some(new_chat_id);
                 chat_id_blocked = new_chat_id_blocked;
@@ -755,7 +779,7 @@ async fn add_parts(
             if chat_id.is_none() {
                 if let Some((new_chat_id, new_chat_id_blocked)) = create_or_lookup_group(
                     context,
-                    &mut mime_parser,
+                    mime_parser,
                     sent_timestamp,
                     allow_creation,
                     Blocked::Not,
@@ -775,7 +799,11 @@ async fn add_parts(
             }
             if chat_id.is_none() && allow_creation {
                 let create_blocked = if !Contact::is_blocked_load(context, to_id).await? {
-                    Blocked::Not
+                    if self_sent && *hidden {
+                        Blocked::Yes
+                    } else {
+                        Blocked::Not
+                    }
                 } else {
                     Blocked::Request
                 };
@@ -794,9 +822,6 @@ async fn add_parts(
                 }
             }
         }
-        let self_sent = from_id == DC_CONTACT_ID_SELF
-            && to_ids.len() == 1
-            && to_ids.contains(&DC_CONTACT_ID_SELF);
 
         if chat_id.is_none() && self_sent {
             // from_id==to_id==DC_CONTACT_ID_SELF - this is a self-sent messages,
@@ -1303,7 +1328,7 @@ async fn calc_sort_timestamp(
 
 async fn lookup_chat_by_reply(
     context: &Context,
-    mime_parser: &&mut MimeMessage,
+    mime_parser: &mut MimeMessage,
     parent: &Option<Message>,
     from_id: u32,
     to_ids: &ContactIds,
@@ -1520,6 +1545,17 @@ async fn create_or_lookup_group(
     }
     set_better_msg(mime_parser, &better_msg);
 
+    let create_protected = if mime_parser.get_header(HeaderDef::ChatVerified).is_some() {
+        if let Err(err) = check_verified_properties(context, mime_parser, from_id, to_ids).await {
+            warn!(context, "verification problem: {}", err);
+            let s = format!("{}. See 'Info' for more details", err);
+            mime_parser.repl_msg_by_error(&s);
+        }
+        ProtectionStatus::Protected
+    } else {
+        ProtectionStatus::Unprotected
+    };
+
     // check if the group does not exist but should be created
     let group_explicitly_left = chat::is_group_explicitly_left(context, &grpid)
         .await
@@ -1540,18 +1576,6 @@ async fn create_or_lookup_group(
                 || X_MrAddToGrp.is_some() && addr_cmp(&self_addr, X_MrAddToGrp.as_ref().unwrap()))
     {
         // group does not exist but should be created
-        let create_protected = if mime_parser.get_header(HeaderDef::ChatVerified).is_some() {
-            if let Err(err) = check_verified_properties(context, mime_parser, from_id, to_ids).await
-            {
-                warn!(context, "verification problem: {}", err);
-                let s = format!("{}. See 'Info' for more details", err);
-                mime_parser.repl_msg_by_error(&s);
-            }
-            ProtectionStatus::Protected
-        } else {
-            ProtectionStatus::Unprotected
-        };
-
         if !allow_creation {
             info!(context, "creating group forbidden by caller");
             return Ok(None);
@@ -1592,6 +1616,16 @@ async fn create_or_lookup_group(
         //    .add_protection_msg(context, ProtectionStatus::Protected, false, 0)
         //    .await?;
         //}
+    } else if let Some(chat_id) = chat_id {
+        if create_protected == ProtectionStatus::Protected {
+            let chat = Chat::load_from_db(context, chat_id).await?;
+            if !chat.is_protected() {
+                chat_id
+                    .inner_set_protection(context, ProtectionStatus::Protected)
+                    .await?;
+                recreate_member_list = true;
+            }
+        }
     }
 
     // again, check chat_id
