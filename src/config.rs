@@ -68,6 +68,9 @@ pub enum Config {
     MdnsEnabled,
 
     #[strum(props(default = "1"))]
+    SubjectEnabled,
+
+    #[strum(props(default = "1"))]
     InboxWatch,
 
     #[strum(props(default = "0"))]
