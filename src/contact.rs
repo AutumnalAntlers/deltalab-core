@@ -5,7 +5,6 @@ use std::convert::{TryFrom, TryInto};
 use anyhow::{bail, ensure, Context as _, Result};
 use async_std::path::PathBuf;
 use deltachat_derive::{FromSql, ToSql};
-use itertools::Itertools;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -66,6 +65,9 @@ pub struct Contact {
 
     /// Blocked state. Use dc_contact_is_blocked to access this field.
     pub blocked: bool,
+
+    /// Time when the contact was seen last time, Unix time in seconds.
+    last_seen: i64,
 
     /// The origin/source of the contact.
     pub origin: Origin,
@@ -186,7 +188,8 @@ impl Contact {
         let mut contact = context
             .sql
             .query_row(
-                "SELECT c.name, c.addr, c.origin, c.blocked, c.authname, c.param, c.status
+                "SELECT c.name, c.addr, c.origin, c.blocked, c.last_seen,
+                c.authname, c.param, c.status
                FROM contacts c
               WHERE c.id=?;",
                 paramsv![contact_id as i32],
@@ -195,15 +198,17 @@ impl Contact {
                     let addr: String = row.get(1)?;
                     let origin: Origin = row.get(2)?;
                     let blocked: Option<bool> = row.get(3)?;
-                    let authname: String = row.get(4)?;
-                    let param: String = row.get(5)?;
-                    let status: Option<String> = row.get(6)?;
+                    let last_seen: i64 = row.get(4)?;
+                    let authname: String = row.get(5)?;
+                    let param: String = row.get(6)?;
+                    let status: Option<String> = row.get(7)?;
                     let contact = Self {
                         id: contact_id,
                         name,
                         authname,
                         addr,
                         blocked: blocked.unwrap_or_default(),
+                        last_seen,
                         origin,
                         param: param.parse().unwrap_or_default(),
                         status: status.unwrap_or_default(),
@@ -233,6 +238,11 @@ impl Contact {
     /// Returns `true` if this contact is blocked.
     pub fn is_blocked(&self) -> bool {
         self.blocked
+    }
+
+    /// Returns last seen timestamp.
+    pub fn last_seen(&self) -> i64 {
+        self.last_seen
     }
 
     /// Check if a contact is blocked.
@@ -1290,6 +1300,27 @@ pub(crate) async fn set_status(
     Ok(())
 }
 
+/// Updates last seen timestamp of the contact if it is earlier than the given `timestamp`.
+pub(crate) async fn update_last_seen(
+    context: &Context,
+    contact_id: u32,
+    timestamp: i64,
+) -> Result<()> {
+    ensure!(
+        contact_id > DC_CONTACT_ID_LAST_SPECIAL,
+        "Can not update special contact last seen timestamp"
+    );
+
+    context
+        .sql
+        .execute(
+            "UPDATE contacts SET last_seen = ?1 WHERE last_seen < ?1 AND id = ?2",
+            paramsv![timestamp, contact_id],
+        )
+        .await?;
+    Ok(())
+}
+
 /// Normalize a name.
 ///
 /// - Remove quotes (come from some bad MUA implementations)
@@ -1357,15 +1388,13 @@ pub fn addr_cmp(addr1: impl AsRef<str>, addr2: impl AsRef<str>) -> bool {
 
 fn split_address_book(book: &str) -> Vec<(&str, &str)> {
     book.lines()
+        .collect::<Vec<&str>>()
         .chunks(2)
         .into_iter()
-        .filter_map(|mut chunk| {
-            let name = chunk.next().unwrap();
-            let addr = match chunk.next() {
-                Some(a) => a,
-                None => return None,
-            };
-            Some((name, addr))
+        .filter_map(|chunk| {
+            let name = chunk.get(0)?;
+            let addr = chunk.get(1)?;
+            Some((*name, *addr))
         })
         .collect()
 }
@@ -1378,6 +1407,7 @@ mod tests {
     use super::*;
 
     use crate::chat::send_text_msg;
+    use crate::dc_receive_imf::dc_receive_imf;
     use crate::message::Message;
     use crate::test_utils::{self, TestContext};
 
@@ -2042,6 +2072,36 @@ CCCB 5AA9 F6E1 141C 9431
             .evtracker
             .get_matching(|e| e == EventType::SelfavatarChanged)
             .await;
+
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_last_seen() -> Result<()> {
+        let alice = TestContext::new_alice().await;
+
+        let (contact_id, _) =
+            Contact::add_or_lookup(&alice, "Bob", "bob@example.net", Origin::ManuallyCreated)
+                .await?;
+        let contact = Contact::load_from_db(&alice, contact_id).await?;
+        assert_eq!(contact.last_seen(), 0);
+
+        let mime = br#"Subject: Hello
+Message-ID: message@example.net
+To: Alice <alice@example.com>
+From: Bob <bob@example.net>
+Content-Type: text/plain; charset=utf-8; format=flowed; delsp=no
+Chat-Version: 1.0
+Date: Sun, 22 Mar 2020 22:37:55 +0000
+
+Hi."#;
+        dc_receive_imf(&alice, mime, "Inbox", 1, false).await?;
+        let msg = alice.get_last_msg().await;
+
+        let timestamp = msg.get_timestamp();
+        assert!(timestamp > 0);
+        let contact = Contact::load_from_db(&alice, contact_id).await?;
+        assert_eq!(contact.last_seen(), timestamp);
 
         Ok(())
     }

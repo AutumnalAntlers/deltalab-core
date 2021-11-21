@@ -1407,7 +1407,6 @@ mod tests {
     use crate::test_utils::{get_chat_msg, TestContext};
 
     use async_std::fs::File;
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_render_email_address() {
