@@ -63,7 +63,7 @@ pub type dc_context_t = Context;
 
 #[no_mangle]
 pub unsafe extern "C" fn dc_context_new(
-    os_name: *const libc::c_char,
+    _os_name: *const libc::c_char,
     dbfile: *const libc::c_char,
     blobdir: *const libc::c_char,
 ) -> *mut dc_context_t {
@@ -74,21 +74,11 @@ pub unsafe extern "C" fn dc_context_new(
         return ptr::null_mut();
     }
 
-    let os_name = if os_name.is_null() {
-        String::from("DcFFI")
-    } else {
-        to_string_lossy(os_name)
-    };
-
     let ctx = if blobdir.is_null() || *blobdir == 0 {
         use rand::Rng;
         // generate random ID as this functionality is not yet available on the C-api.
         let id = rand::thread_rng().gen();
-        block_on(Context::new(
-            os_name,
-            as_path(dbfile).to_path_buf().into(),
-            id,
-        ))
+        block_on(Context::new(as_path(dbfile).to_path_buf().into(), id))
     } else {
         eprintln!("blobdir can not be defined explicitly anymore");
         return ptr::null_mut();
@@ -642,8 +632,8 @@ pub unsafe extern "C" fn dc_preconfigure_keypair(
     let ctx = &*context;
     block_on(async move {
         let addr = dc_tools::EmailAddress::new(&to_string_lossy(addr))?;
-        let public = key::SignedPublicKey::from_base64(&to_string_lossy(public_data))?;
-        let secret = key::SignedSecretKey::from_base64(&to_string_lossy(secret_data))?;
+        let public = key::SignedPublicKey::from_asc(&to_string_lossy(public_data))?.0;
+        let secret = key::SignedSecretKey::from_asc(&to_string_lossy(secret_data))?.0;
         let keypair = key::KeyPair {
             addr,
             public,
@@ -3839,7 +3829,7 @@ pub type dc_accounts_t = AccountsWrapper;
 
 #[no_mangle]
 pub unsafe extern "C" fn dc_accounts_new(
-    os_name: *const libc::c_char,
+    _os_name: *const libc::c_char,
     dbfile: *const libc::c_char,
 ) -> *mut dc_accounts_t {
     setup_panic!();
@@ -3849,13 +3839,7 @@ pub unsafe extern "C" fn dc_accounts_new(
         return ptr::null_mut();
     }
 
-    let os_name = if os_name.is_null() {
-        String::from("DcFFI")
-    } else {
-        to_string_lossy(os_name)
-    };
-
-    let accs = block_on(Accounts::new(os_name, as_path(dbfile).to_path_buf().into()));
+    let accs = block_on(Accounts::new(as_path(dbfile).to_path_buf().into()));
 
     match accs {
         Ok(accs) => Box::into_raw(Box::new(AccountsWrapper::new(accs))),

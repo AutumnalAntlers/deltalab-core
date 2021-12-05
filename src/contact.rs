@@ -1901,7 +1901,7 @@ mod tests {
 
         let alice = TestContext::new_alice().await;
 
-        let id = Contact::lookup_id_by_addr(&alice.ctx, "alice@example.com", Origin::Unknown)
+        let id = Contact::lookup_id_by_addr(&alice.ctx, "alice@example.org", Origin::Unknown)
             .await
             .unwrap();
         assert_eq!(id, Some(DC_CONTACT_ID_SELF));
@@ -1926,7 +1926,7 @@ mod tests {
 
         let bob = TestContext::new_bob().await;
         let chat_alice = bob
-            .create_chat_with_contact("Alice", "alice@example.com")
+            .create_chat_with_contact("Alice", "alice@example.org")
             .await;
         send_text_msg(&bob, chat_alice.id, "Hello".to_string()).await?;
         let msg = bob.pop_sent_msg().await;
@@ -1938,7 +1938,7 @@ mod tests {
             "End-to-end encryption preferred.
 Fingerprints:
 
-alice@example.com:
+alice@example.org:
 2E6F A2CB 23B5 32D7 2863
 4B58 64B0 8F61 A9ED 9443
 
@@ -1989,7 +1989,7 @@ CCCB 5AA9 F6E1 141C 9431
 
         // Bob replies.
         let chat = bob
-            .create_chat_with_contact("Alice", "alice@example.com")
+            .create_chat_with_contact("Alice", "alice@example.org")
             .await;
 
         send_text_msg(&bob, chat.id, "Reply".to_string()).await?;
@@ -2045,7 +2045,7 @@ CCCB 5AA9 F6E1 141C 9431
 
         // Bob sends a message so that Alice can encrypt to him.
         let chat = bob
-            .create_chat_with_contact("Alice", "alice@example.com")
+            .create_chat_with_contact("Alice", "alice@example.org")
             .await;
 
         send_text_msg(&bob, chat.id, "Reply".to_string()).await?;
@@ -2088,7 +2088,7 @@ CCCB 5AA9 F6E1 141C 9431
 
         let mime = br#"Subject: Hello
 Message-ID: message@example.net
-To: Alice <alice@example.com>
+To: Alice <alice@example.org>
 From: Bob <bob@example.net>
 Content-Type: text/plain; charset=utf-8; format=flowed; delsp=no
 Chat-Version: 1.0
