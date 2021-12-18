@@ -46,7 +46,7 @@ pub enum ShowEmails {
 
 impl Default for ShowEmails {
     fn default() -> Self {
-        ShowEmails::Off // also change Config.ShowEmails props(default) on changes
+        ShowEmails::All // also change Config.ShowEmails props(default) on changes
     }
 }
 
@@ -61,7 +61,7 @@ pub enum MediaQuality {
 
 impl Default for MediaQuality {
     fn default() -> Self {
-        MediaQuality::Balanced // also change Config.MediaQuality props(default) on changes
+        MediaQuality::Worse // also change Config.MediaQuality props(default) on changes
     }
 }
 
