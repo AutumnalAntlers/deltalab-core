@@ -1632,7 +1632,6 @@ mod tests {
             \n\
             hello\n",
             "INBOX",
-            1,
             false,
         )
         .await
@@ -1726,7 +1725,6 @@ mod tests {
             )
             .as_bytes(),
             "INBOX",
-            5,
             false,
         )
         .await?;
@@ -1838,7 +1836,6 @@ mod tests {
                     \n\
                     Some other, completely unrelated content\n",
                 "INBOX",
-                2,
                 false,
             )
             .await
@@ -1863,7 +1860,7 @@ mod tests {
             .await
             .unwrap();
 
-        dc_receive_imf(context, imf_raw, "INBOX", 1, false)
+        dc_receive_imf(context, imf_raw, "INBOX", false)
             .await
             .unwrap();
 
