@@ -1536,9 +1536,9 @@ mod tests {
         let t = TestContext::new().await;
         assert_eq!(t.is_self_addr("me@me.org").await?, false);
 
-        let addr = t.configure_alice().await;
+        t.configure_addr("you@you.net").await;
         assert_eq!(t.is_self_addr("me@me.org").await?, false);
-        assert_eq!(t.is_self_addr(&addr).await?, true);
+        assert_eq!(t.is_self_addr("you@you.net").await?, true);
 
         Ok(())
     }
@@ -2040,7 +2040,7 @@ CCCB 5AA9 F6E1 141C 9431
 
         alice1
             .evtracker
-            .get_matching(|e| e == EventType::SelfavatarChanged)
+            .get_matching(|e| matches!(e, EventType::SelfavatarChanged))
             .await;
 
         // Bob sends a message so that Alice can encrypt to him.
@@ -2070,7 +2070,7 @@ CCCB 5AA9 F6E1 141C 9431
         assert!(alice2.get_config(Config::Selfavatar).await?.is_some());
         alice2
             .evtracker
-            .get_matching(|e| e == EventType::SelfavatarChanged)
+            .get_matching(|e| matches!(e, EventType::SelfavatarChanged))
             .await;
 
         Ok(())

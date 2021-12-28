@@ -2,20 +2,22 @@
 //!
 //! This private module is only compiled for test runs.
 
+use std::collections::BTreeMap;
 use std::ops::Deref;
+use std::panic;
 use std::str::FromStr;
+use std::thread;
 use std::time::{Duration, Instant};
-use std::{collections::BTreeMap, panic};
-use std::{fmt, thread};
 
 use ansi_term::Color;
-use async_std::channel::Receiver;
+use async_std::channel::{self, Receiver, Sender};
 use async_std::path::PathBuf;
+use async_std::prelude::*;
 use async_std::sync::{Arc, RwLock};
-use async_std::{channel, pin::Pin};
-use async_std::{future::Future, task};
+use async_std::task;
 use chat::ChatItem;
 use once_cell::sync::Lazy;
+use rand::Rng;
 use tempfile::{tempdir, TempDir};
 
 use crate::chat::{self, Chat, ChatId};
@@ -29,7 +31,7 @@ use crate::dc_receive_imf::dc_receive_imf;
 use crate::dc_tools::EmailAddress;
 use crate::events::{Event, EventType};
 use crate::job::Action;
-use crate::key::{self, DcKey};
+use crate::key::{self, DcKey, KeyPair, KeyPairUse};
 use crate::message::{update_msg_state, Message, MessageState, MsgId};
 use crate::mimeparser::MimeMessage;
 use crate::param::{Param, Params};
@@ -37,38 +39,100 @@ use crate::param::{Param, Params};
 #[allow(non_upper_case_globals)]
 pub const AVATAR_900x900_BYTES: &[u8] = include_bytes!("../test-data/image/avatar900x900.png");
 
-type EventSink =
-    dyn Fn(Event) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> + Send + Sync + 'static;
-
 /// Map of [`Context::id`] to names for [`TestContext`]s.
 static CONTEXT_NAMES: Lazy<std::sync::RwLock<BTreeMap<u32, String>>> =
     Lazy::new(|| std::sync::RwLock::new(BTreeMap::new()));
+
+#[derive(Debug, Clone, Default)]
+pub struct TestContextBuilder {
+    key_pair: Option<KeyPair>,
+    log_sink: Option<Sender<Event>>,
+}
+
+impl TestContextBuilder {
+    /// Configures as alice@example.org with fixed secret key.
+    ///
+    /// This is a shortcut for `.with_key_pair(alice_keypair()).
+    pub fn configure_alice(self) -> Self {
+        self.with_key_pair(alice_keypair())
+    }
+
+    /// Configures as bob@example.net with fixed secret key.
+    ///
+    /// This is a shortcut for `.with_key_pair(bob_keypair()).
+    pub fn configure_bob(self) -> Self {
+        self.with_key_pair(bob_keypair())
+    }
+
+    /// Configures the new [`TestContext`] with the provided [`KeyPair`].
+    ///
+    /// This will extract the email address from the key and configure the context with the
+    /// given identity.
+    pub fn with_key_pair(mut self, key_pair: KeyPair) -> Self {
+        self.key_pair = Some(key_pair);
+        self
+    }
+
+    /// Attaches a [`LogSink`] to this [`TestContext`].
+    ///
+    /// This is useful when using multiple [`TestContext`] instances in one test: it allows
+    /// using a single [`LogSink`] for both contexts.  This shows the log messages in
+    /// sequence as they occurred rather than all messages from each context in a single
+    /// block.
+    pub fn with_log_sink(mut self, sink: Sender<Event>) -> Self {
+        self.log_sink = Some(sink);
+        self
+    }
+
+    /// Builds the [`TestContext`].
+    pub async fn build(self) -> TestContext {
+        let name = self.key_pair.as_ref().map(|key| key.addr.local.clone());
+
+        let test_context = TestContext::new_internal(name, self.log_sink).await;
+
+        if let Some(key_pair) = self.key_pair {
+            test_context
+                .configure_addr(&key_pair.addr.to_string())
+                .await;
+            key::store_self_keypair(&test_context, &key_pair, KeyPairUse::Default)
+                .await
+                .expect("Failed to save key");
+        }
+        test_context
+    }
+}
 
 /// A Context and temporary directory.
 ///
 /// The temporary directory can be used to store the SQLite database,
 /// see e.g. [test_context] which does this.
-pub(crate) struct TestContext {
+#[derive(Debug)]
+pub struct TestContext {
     pub ctx: Context,
     pub dir: TempDir,
-    pub evtracker: EvTracker,
-    /// Functions to call for events received.
-    event_sinks: Arc<RwLock<Vec<Box<EventSink>>>>,
+    pub evtracker: EventTracker,
+    /// Channels which should receive events from this context.
+    event_senders: Arc<RwLock<Vec<Sender<Event>>>>,
     /// Receives panics from sinks ("sink" means "event handler" here)
-    poison_receiver: channel::Receiver<String>,
-}
-
-impl fmt::Debug for TestContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TestContext")
-            .field("ctx", &self.ctx)
-            .field("dir", &self.dir)
-            .field("event_sinks", &String::from("Vec<EventSink>"))
-            .finish()
-    }
+    poison_receiver: Receiver<String>,
+    /// Reference to implicit [`LogSink`] so it is dropped together with the context.
+    ///
+    /// Only used if no explicit `log_sender` is passed into [`TestContext::new_internal`]
+    /// (which is assumed to be the sending end of a [`LogSink`]).
+    ///
+    /// This is a convenience in case only a single [`TestContext`] is used to avoid dealing
+    /// with [`LogSink`].  Never read, thus "dead code", since the only purpose is to
+    /// control when Drop is invoked.
+    #[allow(dead_code)]
+    log_sink: Option<LogSink>,
 }
 
 impl TestContext {
+    /// Returns the builder to have more control over creating the context.
+    pub fn builder() -> TestContextBuilder {
+        TestContextBuilder::default()
+    }
+
     /// Creates a new [`TestContext`].
     ///
     /// The [Context] will be created and have an SQLite database named "db.sqlite" in the
@@ -77,18 +141,33 @@ impl TestContext {
     ///
     /// [Context]: crate::context::Context
     pub async fn new() -> Self {
-        Self::new_named(None).await
+        Self::new_internal(None, None).await
     }
 
-    /// Creates a new [`TestContext`] with a set name used in event logging.
-    pub async fn with_name(name: impl Into<String>) -> Self {
-        Self::new_named(Some(name.into())).await
+    /// Creates a new configured [`TestContext`].
+    ///
+    /// This is a shortcut which automatically calls [`TestContext::configure_alice`] after
+    /// creating the context.
+    pub async fn new_alice() -> Self {
+        Self::builder().configure_alice().build().await
     }
 
-    async fn new_named(name: Option<String>) -> Self {
-        use rand::Rng;
-        pretty_env_logger::try_init().ok();
+    /// Creates a new configured [`TestContext`].
+    ///
+    /// This is a shortcut which configures bob@example.net with a fixed key.
+    pub async fn new_bob() -> Self {
+        Self::builder().configure_bob().build().await
+    }
 
+    /// Internal constructor.
+    ///
+    /// `name` is used to identify this context in e.g. log output.  This is useful mostly
+    /// when you have multiple [`TestContext`]s in a test.
+    ///
+    /// `log_sender` is assumed to be the sender for a [`LogSink`].  If not supplied a new
+    /// [`LogSink`] will be created so that events are logged to this test when the
+    /// [`TestContext`] is dropped.
+    async fn new_internal(name: Option<String>, log_sender: Option<Sender<Event>>) -> Self {
         let dir = tempdir().unwrap();
         let dbfile = dir.path().join("db.sqlite");
         let id = rand::thread_rng().gen();
@@ -102,12 +181,20 @@ impl TestContext {
 
         let events = ctx.get_event_emitter();
 
-        let event_sinks: Arc<RwLock<Vec<Box<EventSink>>>> = Arc::new(RwLock::new(Vec::new()));
-        let sinks = Arc::clone(&event_sinks);
-        let (poison_sender, poison_receiver) = channel::bounded(1);
-        let (evtracker_sender, evtracker_receiver) = channel::unbounded();
+        let (log_sender, log_sink) = match log_sender {
+            Some(sender) => (sender, None),
+            None => {
+                let (sender, sink) = LogSink::create();
+                (sender, Some(sink))
+            }
+        };
 
-        async_std::task::spawn(async move {
+        let (evtracker_sender, evtracker_receiver) = channel::unbounded();
+        let event_senders = Arc::new(RwLock::new(vec![log_sender, evtracker_sender]));
+        let senders = Arc::clone(&event_senders);
+        let (poison_sender, poison_receiver) = channel::bounded(1);
+
+        task::spawn(async move {
             // Make sure that the test fails if there is a panic on this thread here
             // (but not if there is a panic on another thread)
             let looptask_id = task::current().id();
@@ -123,47 +210,24 @@ impl TestContext {
 
             while let Some(event) = events.recv().await {
                 {
-                    log::debug!("{:?}", event);
-                    let sinks = sinks.read().await;
-                    for sink in sinks.iter() {
-                        sink(event.clone()).await;
+                    let sinks = senders.read().await;
+                    for sender in sinks.iter() {
+                        // Don't block because someone wanted to use a oneshot receiver, use
+                        // an unbounded channel if you want all events.
+                        sender.try_send(event.clone()).ok();
                     }
                 }
-                receive_event(&event);
-                evtracker_sender.send(event.typ).await.ok();
             }
         });
 
         Self {
             ctx,
             dir,
-            evtracker: EvTracker(evtracker_receiver),
-            event_sinks,
+            evtracker: EventTracker(evtracker_receiver),
+            event_senders,
             poison_receiver,
+            log_sink,
         }
-    }
-
-    /// Creates a new configured [`TestContext`].
-    ///
-    /// This is a shortcut which automatically calls [`TestContext::configure_alice`] after
-    /// creating the context.
-    pub async fn new_alice() -> Self {
-        let t = Self::with_name("alice").await;
-        t.configure_alice().await;
-        t
-    }
-
-    /// Creates a new configured [`TestContext`].
-    ///
-    /// This is a shortcut which configures bob@example.net with a fixed key.
-    pub async fn new_bob() -> Self {
-        let t = Self::with_name("bob").await;
-        let keypair = bob_keypair();
-        t.configure_addr(&keypair.addr.to_string()).await;
-        key::store_self_keypair(&t, &keypair, key::KeyPairUse::Default)
-            .await
-            .expect("Failed to save Bob's key");
-        t
     }
 
     /// Sets a name for this [`TestContext`] if one isn't yet set.
@@ -176,32 +240,12 @@ impl TestContext {
             .or_insert_with(|| name.into());
     }
 
-    /// Add a new callback which will receive events.
+    /// Adds a new [`Event`]s sender.
     ///
-    /// The test context runs an async task receiving all events from the [`Context`], which
-    /// are logged to stdout.  This allows you to register additional callbacks which will
-    /// receive all events in case your tests need to watch for a specific event.
-    pub async fn add_event_sink<F, R>(&self, sink: F)
-    where
-        // Aka `F: EventSink` but type aliases are not allowed.
-        F: Fn(Event) -> R + Send + Sync + 'static,
-        R: Future<Output = ()> + Send + 'static,
-    {
-        let mut sinks = self.event_sinks.write().await;
-        sinks.push(Box::new(move |evt| Box::pin(sink(evt))));
-    }
-
-    /// Configure with alice@example.org.
-    ///
-    /// The context will be fake-configured as the alice user, with a pre-generated secret
-    /// key.  The email address of the user is returned as a string.
-    pub async fn configure_alice(&self) -> String {
-        let keypair = alice_keypair();
-        self.configure_addr(&keypair.addr.to_string()).await;
-        key::store_self_keypair(&self.ctx, &keypair, key::KeyPairUse::Default)
-            .await
-            .expect("Failed to save Alice's key");
-        keypair.addr.to_string()
+    /// Once added, all events emitted by this context will be sent to this channel.  This
+    /// is useful if you need to wait for events or make assertions on them.
+    pub async fn add_event_sender(&self, sink: Sender<Event>) {
+        self.event_senders.write().await.push(sink)
     }
 
     /// Configure as a given email address.
@@ -508,6 +552,38 @@ impl Drop for TestContext {
     }
 }
 
+/// A receiver of [`Event`]s which will log the events to the captured test stdout.
+///
+/// Tests redirect the stdout of the test thread and capture this, showing the captured
+/// stdout if the test fails.  This means printing log messages must be done on the thread
+/// of the test itself and not from a spawned task.
+///
+/// This sink achieves this by printing the events, in the order received, at the time it is
+/// dropped.  Thus to use you must only make sure this sink is dropped in the test itself.
+///
+/// To use this create an instance using [`LogSink::create`] and then use the
+/// [`TestContextBuilder::with_log_sink`].
+#[derive(Debug)]
+pub struct LogSink {
+    events: Receiver<Event>,
+}
+
+impl LogSink {
+    /// Creates a new [`LogSink`] and returns the attached event sink.
+    pub fn create() -> (Sender<Event>, Self) {
+        let (tx, rx) = channel::unbounded();
+        (tx, Self { events: rx })
+    }
+}
+
+impl Drop for LogSink {
+    fn drop(&mut self) {
+        while let Ok(event) = self.events.try_recv() {
+            print_event(&event);
+        }
+    }
+}
+
 /// A raw message as it was scheduled to be sent.
 ///
 /// This is a raw message, probably in the shape DC was planning to send it but not having
@@ -543,7 +619,7 @@ impl SentMessage {
 /// This saves CPU cycles by avoiding having to generate a key.
 ///
 /// The keypair was created using the crate::key::tests::gen_key test.
-pub fn alice_keypair() -> key::KeyPair {
+pub fn alice_keypair() -> KeyPair {
     let addr = EmailAddress::new("alice@example.org").unwrap();
 
     let public = key::SignedPublicKey::from_asc(include_str!("../test-data/key/alice-public.asc"))
@@ -562,7 +638,7 @@ pub fn alice_keypair() -> key::KeyPair {
 /// Load a pre-generated keypair for bob@example.net from disk.
 ///
 /// Like [alice_keypair] but a different key and identity.
-pub fn bob_keypair() -> key::KeyPair {
+pub fn bob_keypair() -> KeyPair {
     let addr = EmailAddress::new("bob@example.net").unwrap();
     let public = key::SignedPublicKey::from_asc(include_str!("../test-data/key/bob-public.asc"))
         .unwrap()
@@ -577,40 +653,43 @@ pub fn bob_keypair() -> key::KeyPair {
     }
 }
 
-pub struct EvTracker(Receiver<EventType>);
+/// Utility to help wait for and retrieve events.
+///
+/// This buffers the events in order they are emitted.  This allows consuming events in
+/// order while looking for the right events using the provided methods.
+///
+/// The methods only return [`EventType`] rather than the full [`Event`] since it can only
+/// be attached to a single [`TestContext`] and therefore the context is already known as
+/// you will be accessing it as [`TestContext::evtracker`].
+#[derive(Debug)]
+pub struct EventTracker(Receiver<Event>);
 
-impl EvTracker {
-    pub async fn get_info_contains(&self, s: &str) -> EventType {
-        loop {
-            let event = self.0.recv().await.unwrap();
-            if let EventType::Info(i) = &event {
-                if i.contains(s) {
-                    return event;
+impl EventTracker {
+    /// Consumes emitted events returning the first matching one.
+    ///
+    /// If no matching events are ready this will wait for new events to arrive and time out
+    /// after 10 seconds.
+    pub async fn get_matching<F: Fn(&EventType) -> bool>(&self, event_matcher: F) -> EventType {
+        async move {
+            loop {
+                let event = self.0.recv().await.unwrap();
+                if event_matcher(&event.typ) {
+                    return event.typ;
                 }
             }
         }
+        .timeout(Duration::from_secs(10))
+        .await
+        .expect("timeout waiting for event match")
     }
 
-    pub async fn get_matching<F: Fn(EventType) -> bool>(&self, event_matcher: F) -> EventType {
-        const TIMEOUT: Duration = Duration::from_secs(20);
-
-        loop {
-            let event = async_std::future::timeout(TIMEOUT, self.recv())
-                .await
-                .unwrap()
-                .unwrap();
-
-            if event_matcher(event.clone()) {
-                return event;
-            }
-        }
-    }
-}
-
-impl Deref for EvTracker {
-    type Target = Receiver<EventType>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    /// Consumes events looking for an [`EventType::Info`] with substring matching.
+    pub async fn get_info_contains(&self, s: &str) -> EventType {
+        self.get_matching(|evt| match evt {
+            EventType::Info(ref msg) => msg.contains(s),
+            _ => false,
+        })
+        .await
     }
 }
 
@@ -637,7 +716,7 @@ pub(crate) async fn get_chat_msg(
 /// Pretty-print an event to stdout
 ///
 /// Done during tests this is captured by `cargo test` and associated with the test itself.
-fn receive_event(event: &Event) {
+fn print_event(event: &Event) {
     let green = Color::Green.normal();
     let yellow = Color::Yellow.normal();
     let red = Color::Red.normal();
@@ -755,4 +834,44 @@ async fn log_msg(context: &Context, prefix: impl AsRef<str>, msg: &Message) {
         },
         statestr,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The following three tests demonstrate, when made to fail, the log output being
+    // directed to the correct test output.
+
+    #[async_std::test]
+    async fn test_with_alice() {
+        let alice = TestContext::builder().configure_alice().build().await;
+        alice.ctx.emit_event(EventType::Info("hello".into()));
+        // panic!("Alice fails");
+    }
+
+    #[async_std::test]
+    async fn test_with_bob() {
+        let bob = TestContext::builder().configure_bob().build().await;
+        bob.ctx.emit_event(EventType::Info("there".into()));
+        // panic!("Bob fails");
+    }
+
+    #[async_std::test]
+    async fn test_with_both() {
+        let (log_sender, _log_sink) = LogSink::create();
+        let alice = TestContext::builder()
+            .configure_alice()
+            .with_log_sink(log_sender.clone())
+            .build()
+            .await;
+        let bob = TestContext::builder()
+            .configure_bob()
+            .with_log_sink(log_sender)
+            .build()
+            .await;
+        alice.ctx.emit_event(EventType::Info("hello".into()));
+        bob.ctx.emit_event(EventType::Info("there".into()));
+        // panic!("Both fail");
+    }
 }

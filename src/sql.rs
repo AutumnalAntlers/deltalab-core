@@ -678,11 +678,12 @@ async fn prune_tombstones(sql: &Sql) -> Result<()> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
+    use async_std::channel;
     use async_std::fs::File;
 
     use crate::config::Config;
-    use crate::{test_utils::TestContext, Event, EventType};
+    use crate::{test_utils::TestContext, EventType};
 
     use super::*;
 
@@ -743,18 +744,8 @@ mod test {
             .await
             .unwrap();
 
-        t.add_event_sink(move |event: Event| async move {
-            match event.typ {
-                EventType::Info(s) => assert!(
-                    !s.contains("Keeping new unreferenced file"),
-                    "File {} was almost deleted, only reason it was kept is that it was created recently (as the tests don't run for a long time)",
-                    s
-                ),
-                EventType::Error(s) => panic!("{}", s),
-                _ => {}
-            }
-        })
-        .await;
+        let (event_sink, event_source) = channel::unbounded();
+        t.add_event_sender(event_sink).await;
 
         let a = t.get_config(Config::Selfavatar).await.unwrap().unwrap();
         assert_eq!(avatar_bytes, &async_std::fs::read(&a).await.unwrap()[..]);
@@ -765,6 +756,18 @@ mod test {
 
         let a = t.get_config(Config::Selfavatar).await.unwrap().unwrap();
         assert_eq!(avatar_bytes, &async_std::fs::read(&a).await.unwrap()[..]);
+
+        while let Ok(event) = event_source.try_recv() {
+            match event.typ {
+                EventType::Info(s) => assert!(
+                    !s.contains("Keeping new unreferenced file"),
+                    "File {} was almost deleted, only reason it was kept is that it was created recently (as the tests don't run for a long time)",
+                    s
+                ),
+                EventType::Error(s) => panic!("{}", s),
+                _ => {}
+            }
+        }
     }
 
     /// Regression test.
@@ -826,17 +829,24 @@ mod test {
         assert!(!disable_server_delete);
         assert!(!recode_avatar);
 
-        info!(&t, "test_migration_flags: XXX");
+        info!(&t, "test_migration_flags: XXX END MARKER");
 
         loop {
-            if let EventType::Info(info) = t.evtracker.recv().await.unwrap() {
-                assert!(
-                    !info.contains("[migration]"),
-                    "Migrations were run twice, you probably forgot to update the db version"
-                );
-                if info.contains("test_migration_flags: XXX") {
-                    break;
+            let evt = t
+                .evtracker
+                .get_matching(|evt| matches!(evt, EventType::Info(_)))
+                .await;
+            match evt {
+                EventType::Info(msg) => {
+                    assert!(
+                        !msg.contains("[migration]"),
+                        "Migrations were run twice, you probably forgot to update the db version"
+                    );
+                    if msg.contains("test_migration_flags: XXX END MARKER") {
+                        break;
+                    }
                 }
+                _ => unreachable!(),
             }
         }
 
