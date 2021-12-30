@@ -70,9 +70,6 @@ pub enum Config {
     #[strum(props(default = "1"))]
     SubjectEnabled,
 
-    #[strum(props(default = "1"))]
-    InboxWatch,
-
     #[strum(props(default = "0"))]
     SentboxWatch,
 
