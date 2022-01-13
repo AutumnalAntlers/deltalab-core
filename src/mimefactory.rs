@@ -2,7 +2,7 @@
 
 use std::convert::TryInto;
 
-use anyhow::{bail, ensure, format_err, Context as _, Result};
+use anyhow::{bail, ensure, Context as _, Result};
 use chrono::TimeZone;
 use lettre_email::{mime, Address, Header, MimeMultipartType, PartBuilder};
 
@@ -207,7 +207,6 @@ impl<'a> MimeFactory<'a> {
             )
             .await?;
 
-        let default_str = stock_str::status_line(context).await;
         let factory = MimeFactory {
             from_addr,
             from_displayname,
@@ -215,7 +214,7 @@ impl<'a> MimeFactory<'a> {
             selfstatus: context
                 .get_config(Config::Selfstatus)
                 .await?
-                .unwrap_or(default_str),
+                .unwrap_or_default(),
             recipients,
             timestamp: msg.timestamp_sort,
             loaded: Loaded::Message { chat },
@@ -246,11 +245,10 @@ impl<'a> MimeFactory<'a> {
             .get_config(Config::Displayname)
             .await?
             .unwrap_or_default();
-        let default_str = stock_str::status_line(context).await;
         let selfstatus = context
             .get_config(Config::Selfstatus)
             .await?
-            .unwrap_or(default_str);
+            .unwrap_or_default();
         let timestamp = dc_create_smeared_timestamp(context).await;
 
         let res = MimeFactory::<'a> {
@@ -283,7 +281,7 @@ impl<'a> MimeFactory<'a> {
         let self_addr = context
             .get_config(Config::ConfiguredAddr)
             .await?
-            .ok_or_else(|| format_err!("Not configured"))?;
+            .context("not configured")?;
 
         let mut res = Vec::new();
         for (_, addr) in self
@@ -1280,7 +1278,7 @@ async fn build_body_file(
         .param
         .get_blob(Param::File, context, true)
         .await?
-        .ok_or_else(|| format_err!("msg has no filename"))?;
+        .context("msg has no filename")?;
     let suffix = blob.suffix().unwrap_or("dat");
 
     // Get file name to use for sending.  For privacy purposes, we do
@@ -1872,7 +1870,7 @@ mod tests {
 
         let chats = Chatlist::try_load(context, 0, None, None).await.unwrap();
 
-        let chat_id = chats.get_chat_id(0);
+        let chat_id = chats.get_chat_id(0).unwrap();
         chat_id.accept(context).await.unwrap();
 
         let mut new_msg = Message::new(Viewtype::Text);
@@ -2055,11 +2053,11 @@ mod tests {
         let to = parsed
             .headers
             .get_first_header("To")
-            .ok_or_else(|| format_err!("No To: header parsed"))?;
+            .context("no To: header parsed")?;
         let to = addrparse_header(to)?;
         let mailbox = to
             .extract_single_info()
-            .ok_or_else(|| format_err!("To: field does not contain exactly one address"))?;
+            .context("to: field does not contain exactly one address")?;
         assert_eq!(mailbox.addr, "bob@example.net");
 
         Ok(())

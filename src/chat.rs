@@ -625,7 +625,10 @@ impl ChatId {
     /// Returns `true`, if message was deleted, `false` otherwise.
     async fn maybe_delete_draft(self, context: &Context) -> Result<bool> {
         match self.get_draft_msg_id(context).await? {
-            Some(msg_id) => Ok(msg_id.delete_from_db(context).await.is_ok()),
+            Some(msg_id) => {
+                msg_id.delete_from_db(context).await?;
+                Ok(true)
+            }
             None => Ok(false),
         }
     }
@@ -645,7 +648,7 @@ impl ChatId {
                     .param
                     .get_blob(Param::File, context, !msg.is_increation())
                     .await?
-                    .ok_or_else(|| format_err!("No file stored in params"))?;
+                    .context("no file stored in params")?;
                 msg.param.set(Param::File, blob.as_name());
             }
         }
@@ -1809,9 +1812,7 @@ async fn prepare_msg_blob(context: &Context, msg: &mut Message) -> Result<()> {
             .param
             .get_blob(Param::File, context, !msg.is_increation())
             .await?
-            .ok_or_else(|| {
-                format_err!("Attachment missing for message of type #{}", msg.viewtype)
-            })?;
+            .with_context(|| format!("attachment missing for message of type #{}", msg.viewtype))?;
 
         if msg.viewtype == Viewtype::Image {
             if let Err(e) = blob.recode_to_image_size(context).await {
@@ -3919,7 +3920,7 @@ mod tests {
         assert_eq!(chats.len(), 1);
 
         // after the device-chat and all messages are deleted, a re-adding should do nothing
-        chats.get_chat_id(0).delete(&t).await.ok();
+        chats.get_chat_id(0).unwrap().delete(&t).await.ok();
         add_device_msg(&t, Some("some-label"), Some(&mut msg))
             .await
             .ok();
@@ -4084,7 +4085,7 @@ mod tests {
             .unwrap();
         let mut result = Vec::new();
         for chatlist_index in 0..chatlist.len() {
-            result.push(chatlist.get_chat_id(chatlist_index))
+            result.push(chatlist.get_chat_id(chatlist_index).unwrap())
         }
         result
     }
@@ -4507,7 +4508,7 @@ mod tests {
 
         let chats = Chatlist::try_load(&t, 0, None, None).await?;
         assert_eq!(chats.len(), 1);
-        assert_eq!(chats.get_chat_id(0), chat.id);
+        assert_eq!(chats.get_chat_id(0)?, chat.id);
         assert_eq!(chat.id.get_fresh_msg_cnt(&t).await?, 1);
         assert_eq!(t.get_fresh_msgs().await?.len(), 1);
 
@@ -4555,7 +4556,7 @@ mod tests {
 
         let chats = Chatlist::try_load(&t, 0, None, None).await?;
         assert_eq!(chats.len(), 1);
-        let chat_id = chats.get_chat_id(0);
+        let chat_id = chats.get_chat_id(0).unwrap();
         assert!(Chat::load_from_db(&t, chat_id)
             .await
             .unwrap()
@@ -4603,7 +4604,7 @@ mod tests {
 
         let chats = Chatlist::try_load(&t, 0, None, None).await?;
         assert_eq!(chats.len(), 1);
-        let chat_id = chats.get_chat_id(0);
+        let chat_id = chats.get_chat_id(0)?;
         assert!(Chat::load_from_db(&t, chat_id).await?.is_contact_request());
         assert_eq!(dc_get_archived_cnt(&t).await?, 0);
 
@@ -4612,13 +4613,13 @@ mod tests {
 
         let chats = Chatlist::try_load(&t, 0, None, None).await?;
         assert_eq!(chats.len(), 1);
-        let chat_id = chats.get_chat_id(0);
+        let chat_id = chats.get_chat_id(0)?;
         assert!(chat_id.is_archived_link());
         assert_eq!(dc_get_archived_cnt(&t).await?, 1);
 
         let chats = Chatlist::try_load(&t, DC_GCL_ARCHIVED_ONLY, None, None).await?;
         assert_eq!(chats.len(), 1);
-        let chat_id = chats.get_chat_id(0);
+        let chat_id = chats.get_chat_id(0)?;
         assert!(Chat::load_from_db(&t, chat_id).await?.is_contact_request());
 
         Ok(())
