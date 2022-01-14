@@ -983,6 +983,64 @@ uint32_t dc_send_videochat_invitation (dc_context_t* context, uint32_t chat_id);
 
 
 /**
+ * An webxdc instance send a status update to its other members.
+ *
+ * In js-land, that would be mapped to sth. as:
+ * ```
+ * success = window.webxdc.sendUpdate('{"action":"move","src":"A3","dest":"B4"}', 'move A3 B4');
+ * ```
+ * `context` and `msg_id` is not needed in js as that is unique within an webxdc instance.
+ * See dc_get_webxdc_status_updates() for the receiving counterpart.
+ *
+ * If the webxdc instance is a draft, the update is not send immediately.
+ * Instead, the updates are collected and sent out in batch when the instance is actually sent.
+ * This allows preparing webxdc instances,
+ * eg. defining a poll with predefined answers.
+ *
+ * Other members will be informed by #DC_EVENT_WEBXDC_STATUS_UPDATE that there is a new update.
+ * You will also get the #DC_EVENT_WEBXDC_STATUS_UPDATE yourself
+ * and the update you're sent will also be included in dc_get_webxdc_status_updates().
+ *
+ * @memberof dc_context_t
+ * @param context The context object
+ * @param msg_id id of the message with the webxdc instance
+ * @param json program-readable data, the actual payload
+ * @param descr user-visible description of the json-data,
+ *     in case of a chess game, eg. the move.
+ * @return 1=success, 0=error
+ */
+int dc_send_webxdc_status_update (dc_context_t* context, uint32_t msg_id, const char* json, const char* descr);
+
+
+/**
+ * Get webxdc status updates.
+ * The status updates may be sent by yourself or by other members using dc_send_webxdc_status_update().
+ * In both cases, you will be informed by #DC_EVENT_WEBXDC_STATUS_UPDATE
+ * whenever there is a new update.
+ *
+ * In js-land, that would be mapped to sth. as:
+ * ```
+ * window.webxdc.setUpdateListener((update) => {
+ *    if (update.payload.action === "move") {
+ *       print(update.payload.src)
+ *       print(update.payload.dest)
+ *    }
+ * });
+ * ```
+ *
+ * @memberof dc_context_t
+ * @param context The context object
+ * @param msg_id id of the message with the webxdc instance
+ * @param status_update_id Can be used to filter out only a concrete status update.
+ *     When set to 0, all known status updates are returned.
+ * @return JSON-array containing the requested updates,
+ *     each element was created by dc_send_webxdc_status_update()
+ *     on this or other devices.
+ *     If there are no updates, an empty JSON-array is returned.
+ */
+char* dc_get_webxdc_status_updates (dc_context_t* context, uint32_t msg_id, uint32_t status_update_id);
+
+/**
  * Save a draft for a chat in the database.
  *
  * The UI should call this function if the user has prepared a message
@@ -3618,6 +3676,42 @@ char*           dc_msg_get_filemime           (const dc_msg_t* msg);
 
 
 /**
+ * Return file from inside an webxdc message.
+ *
+ * @memberof dc_msg_t
+ * @param msg The webxdc instance.
+ * @param filename The name inside the archive,
+ *     can be given as an absolute path (`/file.png`)
+ *     or as a relative path (`file.png`, no leading slash)
+ * @param ret_bytes Pointer to a size_t. The size of the blob will be written here.
+ * @return The blob must be released using dc_str_unref() after usage.
+ *     NULL if there is no such file in the archive or on errors.
+ */
+char*             dc_msg_get_webxdc_blob      (const dc_msg_t* msg, const char* filename, size_t* ret_bytes);
+
+
+/**
+ * Get info from a webxdc message, in JSON format.
+ * The returned JSON string has the following key/values:
+ *
+ * - name: The name of the app.
+ *   Defaults to the filename if not set in the manifest.
+ * - icon: App icon file name.
+ *   Defaults to an standard icon if nothing is set in the manifest.
+ *   To get the file, use dc_msg_get_webxdc_blob().
+ *   App icons should should be square,
+ *   the implementations will add round corners etc. as needed.
+ *
+ * @memberof dc_msg_t
+ * @param msg The webxdc instance.
+ * @return a UTF8-encoded JSON string containing all requested info.
+ *     Must be freed using dc_str_unref().
+ *     NULL is never returned.
+ */
+char*             dc_msg_get_webxdc_info      (const dc_msg_t* msg);
+
+
+/**
  * Get the size of the file.  Returns the size of the file associated with a
  * message, if applicable.
  *
@@ -4774,6 +4868,15 @@ int64_t          dc_lot_get_timestamp     (const dc_lot_t* lot);
  */
 #define DC_MSG_VIDEOCHAT_INVITATION 70
 
+
+/**
+ * The message is a webxdc instance.
+ *
+ * To send data to a webxdc instance, use dc_send_webxdc_status_update()
+ */
+#define DC_MSG_WEBXDC    80
+
+
 /**
  * @}
  */
@@ -5465,6 +5568,21 @@ void dc_event_unref(dc_event_t* event);
  * You can get the new avatar file with `dc_get_config(context, "selfavatar")`.
  */
 #define DC_EVENT_SELFAVATAR_CHANGED               2110
+
+
+/**
+ * webxdc status update received.
+ * To get the received status update, use dc_get_webxdc_status_updates().
+ * To send status updates, use dc_send_webxdc_status_update().
+ *
+ * Note, that you do not get events that arrive when the app is not running;
+ * instead, you can use dc_get_webxdc_status_updates() to get all status updates
+ * and catch up that way.
+ *
+ * @param data1 (int) msg_id
+ * @param data2 (int) status_update_id
+ */
+#define DC_EVENT_WEBXDC_STATUS_UPDATE                2120
 
 
 /**

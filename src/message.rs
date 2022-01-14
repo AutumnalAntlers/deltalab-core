@@ -123,6 +123,13 @@ WHERE id=?;
             .await?;
         context
             .sql
+            .execute(
+                "DELETE FROM msgs_status_updates WHERE msg_id=?;",
+                paramsv![self],
+            )
+            .await?;
+        context
+            .sql
             .execute("DELETE FROM msgs WHERE id=?;", paramsv![self])
             .await?;
         Ok(())
@@ -800,16 +807,21 @@ impl Message {
 
     pub async fn quoted_message(&self, context: &Context) -> Result<Option<Message>> {
         if self.param.get(Param::Quote).is_some() && !self.is_forwarded() {
-            if let Some(in_reply_to) = &self.in_reply_to {
-                if let Some(msg_id) = rfc724_mid_exists(context, in_reply_to).await? {
-                    let msg = Message::load_from_db(context, msg_id).await?;
-                    return if msg.chat_id.is_trash() {
-                        // If message is already moved to trash chat, pretend it does not exist.
-                        Ok(None)
-                    } else {
-                        Ok(Some(msg))
-                    };
-                }
+            return self.parent(context).await;
+        }
+        Ok(None)
+    }
+
+    pub(crate) async fn parent(&self, context: &Context) -> Result<Option<Message>> {
+        if let Some(in_reply_to) = &self.in_reply_to {
+            if let Some(msg_id) = rfc724_mid_exists(context, in_reply_to).await? {
+                let msg = Message::load_from_db(context, msg_id).await?;
+                return if msg.chat_id.is_trash() {
+                    // If message is already moved to trash chat, pretend it does not exist.
+                    Ok(None)
+                } else {
+                    Ok(Some(msg))
+                };
             }
         }
         Ok(None)
@@ -1161,6 +1173,7 @@ pub fn guess_msgtype_from_suffix(path: &Path) -> Option<(Viewtype, &str)> {
         "webm" => (Viewtype::Video, "video/webm"),
         "webp" => (Viewtype::Sticker, "image/webp"), // iOS via SDWebImage, Android since 4.0
         "wmv" => (Viewtype::Video, "video/x-ms-wmv"),
+        "xdc" => (Viewtype::Webxdc, "application/webxdc+zip"),
         "xhtml" => (Viewtype::File, "application/xhtml+xml"),
         "xlsx" => (
             Viewtype::File,
@@ -1685,6 +1698,14 @@ mod tests {
         assert_eq!(
             guess_msgtype_from_suffix(Path::new("foo/bar-sth.mp3")),
             Some((Viewtype::Audio, "audio/mpeg"))
+        );
+        assert_eq!(
+            guess_msgtype_from_suffix(Path::new("foo/file.html")),
+            Some((Viewtype::File, "text/html"))
+        );
+        assert_eq!(
+            guess_msgtype_from_suffix(Path::new("foo/file.xdc")),
+            Some((Viewtype::Webxdc, "application/webxdc+zip"))
         );
     }
 

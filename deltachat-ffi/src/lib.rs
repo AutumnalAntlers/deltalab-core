@@ -37,6 +37,7 @@ use deltachat::ephemeral::Timer as EphemeralTimer;
 use deltachat::key::DcKey;
 use deltachat::message::MsgId;
 use deltachat::stock_str::StockMessage;
+use deltachat::webxdc::StatusUpdateId;
 use deltachat::*;
 use deltachat::{accounts::Accounts, log::LogExt};
 
@@ -500,6 +501,7 @@ pub unsafe extern "C" fn dc_event_get_data1_int(event: *mut dc_event_t) -> libc:
         EventType::ImexFileWritten(_) => 0,
         EventType::SecurejoinInviterProgress { contact_id, .. }
         | EventType::SecurejoinJoinerProgress { contact_id, .. } => *contact_id as libc::c_int,
+        EventType::WebxdcStatusUpdate { msg_id, .. } => msg_id.to_u32() as libc::c_int,
     }
 }
 
@@ -541,6 +543,9 @@ pub unsafe extern "C" fn dc_event_get_data2_int(event: *mut dc_event_t) -> libc:
         EventType::SecurejoinInviterProgress { progress, .. }
         | EventType::SecurejoinJoinerProgress { progress, .. } => *progress as libc::c_int,
         EventType::ChatEphemeralTimerModified { timer, .. } => timer.to_u32() as libc::c_int,
+        EventType::WebxdcStatusUpdate {
+            status_update_id, ..
+        } => status_update_id.to_u32() as libc::c_int,
     }
 }
 
@@ -582,6 +587,7 @@ pub unsafe extern "C" fn dc_event_get_data2_str(event: *mut dc_event_t) -> *mut 
         | EventType::SecurejoinJoinerProgress { .. }
         | EventType::ConnectivityChanged
         | EventType::SelfavatarChanged
+        | EventType::WebxdcStatusUpdate { .. }
         | EventType::ChatEphemeralTimerModified { .. } => ptr::null_mut(),
         EventType::ConfigureProgress { comment, .. } => {
             if let Some(comment) = comment {
@@ -869,6 +875,52 @@ pub unsafe extern "C" fn dc_send_videochat_invitation(
             .map(|msg_id| msg_id.to_u32())
             .unwrap_or_log_default(ctx, "Failed to send video chat invitation")
     })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_send_webxdc_status_update(
+    context: *mut dc_context_t,
+    msg_id: u32,
+    json: *const libc::c_char,
+    descr: *const libc::c_char,
+) -> libc::c_int {
+    if context.is_null() {
+        eprintln!("ignoring careless call to dc_send_webxdc_status_update()");
+        return 0;
+    }
+    let ctx = &*context;
+
+    block_on(ctx.send_webxdc_status_update(
+        MsgId::new(msg_id),
+        &to_string_lossy(json),
+        &to_string_lossy(descr),
+    ))
+    .log_err(ctx, "Failed to send webxdc update")
+    .is_ok() as libc::c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_get_webxdc_status_updates(
+    context: *mut dc_context_t,
+    msg_id: u32,
+    status_update_id: u32,
+) -> *mut libc::c_char {
+    if context.is_null() {
+        eprintln!("ignoring careless call to dc_get_webxdc_status_updates()");
+        return "".strdup();
+    }
+    let ctx = &*context;
+
+    block_on(ctx.get_webxdc_status_updates(
+        MsgId::new(msg_id),
+        if status_update_id == 0 {
+            None
+        } else {
+            Some(StatusUpdateId::new(status_update_id))
+        },
+    ))
+    .unwrap_or_else(|_| "".to_string())
+    .strdup()
 }
 
 #[no_mangle]
@@ -3016,6 +3068,61 @@ pub unsafe extern "C" fn dc_msg_get_filename(msg: *mut dc_msg_t) -> *mut libc::c
     }
     let ffi_msg = &*msg;
     ffi_msg.message.get_filename().unwrap_or_default().strdup()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_msg_get_webxdc_blob(
+    msg: *mut dc_msg_t,
+    filename: *const libc::c_char,
+    ret_bytes: *mut libc::size_t,
+) -> *mut libc::c_char {
+    if msg.is_null() || filename.is_null() || ret_bytes.is_null() {
+        eprintln!("ignoring careless call to dc_msg_get_webxdc_blob()");
+        return ptr::null_mut();
+    }
+    let ffi_msg = &*msg;
+    let ctx = &*ffi_msg.context;
+    let blob = block_on(async move {
+        ffi_msg
+            .message
+            .get_webxdc_blob(ctx, &to_string_lossy(filename))
+            .await
+    });
+    match blob {
+        Ok(blob) => {
+            *ret_bytes = blob.len();
+            let ptr = libc::malloc(*ret_bytes);
+            libc::memcpy(ptr, blob.as_ptr() as *mut libc::c_void, *ret_bytes);
+            ptr as *mut libc::c_char
+        }
+        Err(err) => {
+            eprintln!("failed read blob from archive: {}", err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_msg_get_webxdc_info(msg: *mut dc_msg_t) -> *mut libc::c_char {
+    if msg.is_null() {
+        eprintln!("ignoring careless call to dc_msg_get_webxdc_info()");
+        return "".strdup();
+    }
+    let ffi_msg = &*msg;
+    let ctx = &*ffi_msg.context;
+
+    block_on(async move {
+        let info = match ffi_msg.message.get_webxdc_info(ctx).await {
+            Ok(info) => info,
+            Err(err) => {
+                error!(ctx, "dc_msg_get_webxdc_info() failed to get info: {}", err);
+                return "".strdup();
+            }
+        };
+        serde_json::to_string(&info)
+            .unwrap_or_log_default(ctx, "dc_msg_get_webxdc_info() failed to serialise to json")
+            .strdup()
+    })
 }
 
 #[no_mangle]
