@@ -49,7 +49,7 @@ impl Smtp {
             chunk_size = 20;
         }
 
-        for recipients_chunk in recipients.chunks(chunk_size).into_iter() {
+        for recipients_chunk in recipients.chunks(chunk_size) {
             let recipients_display = recipients_chunk
                 .iter()
                 .map(|x| x.as_ref())

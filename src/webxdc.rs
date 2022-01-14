@@ -20,6 +20,23 @@ use zip::ZipArchive;
 pub const WEBXDC_SUFFIX: &str = "xdc";
 const WEBXDC_DEFAULT_ICON: &str = "__webxdc__/default-icon.png";
 
+/// Defines the maximal size in bytes of an .xdc file that can be sent.
+///
+/// We introduce a limit to force developer to create small .xdc
+/// to save user's traffic and disk space for a better ux.
+///
+/// The 100K limit should also let .xdc pass worse-quality auto-download filters
+/// which are usually 160K incl. base64 overhead.
+///
+/// The limit is also an experiment to see how small we can go;
+/// it is planned to raise that limit as needed in subsequent versions.
+pub(crate) const WEBXDC_SENDING_LIMIT: usize = 102400;
+
+/// Be more tolerant for .xdc sizes on receiving -
+/// might be, the senders version uses already a larger limit
+/// and not showing the .xdc on some devices would be even worse ux.
+const WEBXDC_RECEIVING_LIMIT: usize = 1048576;
+
 /// Raw information read from manifest.toml
 #[derive(Debug, Deserialize)]
 #[non_exhaustive]
@@ -79,24 +96,43 @@ impl Context {
             let reader = std::io::Cursor::new(buf);
             if let Ok(mut archive) = zip::ZipArchive::new(reader) {
                 if let Ok(_index_html) = archive.by_name("index.html") {
-                    return Ok(true);
+                    if buf.len() <= WEBXDC_RECEIVING_LIMIT {
+                        return Ok(true);
+                    } else {
+                        error!(
+                            self,
+                            "{} exceeds acceptable size of {} bytes.",
+                            &filename,
+                            WEBXDC_SENDING_LIMIT
+                        );
+                    }
                 }
             }
         }
         Ok(false)
     }
 
+    /// Takes an update-json as `{payload: PAYLOAD}` (or legacy `PAYLOAD`)
+    /// and writes it to the database.
+    /// Moreover, events are handled.
     async fn create_status_update_record(
         &self,
         instance_msg_id: MsgId,
-        payload: &str,
+        update_str: &str,
     ) -> Result<StatusUpdateId> {
-        let payload = payload.trim();
-        if payload.is_empty() {
-            bail!("create_status_update_record: empty payload");
+        let update_str = update_str.trim();
+        if update_str.is_empty() {
+            bail!("create_status_update_record: empty update.");
         }
-        let payload: Value = serde_json::from_str(payload)?; // checks if input data are valid json
-        let status_update_item = StatusUpdateItem { payload };
+
+        let status_update_item: StatusUpdateItem =
+            if let Ok(status_update_item) = serde_json::from_str(update_str) {
+                status_update_item
+            } else {
+                // TODO: this fallback (legacy `PAYLOAD`) should be deleted soon, together with the test below
+                let payload: Value = serde_json::from_str(update_str)?; // checks if input data are valid json
+                StatusUpdateItem { payload }
+            };
 
         let rowid = self
             .sql
@@ -105,7 +141,14 @@ impl Context {
                 paramsv![instance_msg_id, serde_json::to_string(&status_update_item)?],
             )
             .await?;
-        Ok(StatusUpdateId(u32::try_from(rowid)?))
+        let status_update_id = StatusUpdateId(u32::try_from(rowid)?);
+
+        self.emit_event(EventType::WebxdcStatusUpdate {
+            msg_id: instance_msg_id,
+            status_update_id,
+        });
+
+        Ok(status_update_id)
     }
 
     /// Sends a status update for an webxdc instance.
@@ -118,7 +161,7 @@ impl Context {
     pub async fn send_webxdc_status_update(
         &self,
         instance_msg_id: MsgId,
-        payload: &str,
+        update_str: &str,
         descr: &str,
     ) -> Result<Option<MsgId>> {
         let instance = Message::load_from_db(self, instance_msg_id).await?;
@@ -127,12 +170,8 @@ impl Context {
         }
 
         let status_update_id = self
-            .create_status_update_record(instance_msg_id, payload)
+            .create_status_update_record(instance_msg_id, update_str)
             .await?;
-        self.emit_event(EventType::WebxdcStatusUpdate {
-            msg_id: instance_msg_id,
-            status_update_id,
-        });
         match instance.state {
             MessageState::Undefined | MessageState::OutPreparing | MessageState::OutDraft => {
                 // send update once the instance is actually send
@@ -202,16 +241,8 @@ impl Context {
 
         let updates: StatusUpdates = serde_json::from_str(json)?;
         for update_item in updates.updates {
-            let status_update_id = self
-                .create_status_update_record(
-                    instance.id,
-                    &*serde_json::to_string(&update_item.payload)?,
-                )
+            self.create_status_update_record(instance.id, &*serde_json::to_string(&update_item)?)
                 .await?;
-            self.emit_event(EventType::WebxdcStatusUpdate {
-                msg_id: instance.id,
-                status_update_id,
-            });
         }
 
         Ok(())
@@ -364,6 +395,16 @@ mod tests {
     use async_std::fs::File;
     use async_std::io::WriteExt;
 
+    #[allow(clippy::assertions_on_constants)]
+    #[async_std::test]
+    async fn test_webxdc_file_limits() -> Result<()> {
+        assert!(WEBXDC_SENDING_LIMIT >= 32768);
+        assert!(WEBXDC_SENDING_LIMIT < 16777216);
+        assert!(WEBXDC_RECEIVING_LIMIT >= WEBXDC_SENDING_LIMIT * 2);
+        assert!(WEBXDC_RECEIVING_LIMIT < 16777216);
+        Ok(())
+    }
+
     #[async_std::test]
     async fn test_is_webxdc_file() -> Result<()> {
         let t = TestContext::new().await;
@@ -489,7 +530,7 @@ mod tests {
         .await?;
         chat_id.set_draft(&t, Some(&mut instance)).await?;
         let instance = chat_id.get_draft(&t).await?.unwrap();
-        t.send_webxdc_status_update(instance.id, "42", "descr")
+        t.send_webxdc_status_update(instance.id, r#"{"payload": 42}"#, "descr")
             .await?;
         assert_eq!(
             t.get_webxdc_status_updates(instance.id, None).await?,
@@ -521,7 +562,7 @@ mod tests {
         assert_eq!(t.get_webxdc_status_updates(instance.id, None).await?, "[]");
 
         let id = t
-            .create_status_update_record(instance.id, "\n\n{\"foo\":\"bar\"}\n")
+            .create_status_update_record(instance.id, "\n\n{\"payload\": {\"foo\":\"bar\"}}\n")
             .await?;
         assert_eq!(
             t.get_webxdc_status_updates(instance.id, Some(id)).await?,
@@ -546,18 +587,39 @@ mod tests {
         );
 
         let id = t
-            .create_status_update_record(instance.id, r#"{"foo2":"bar2"}"#)
+            .create_status_update_record(instance.id, r#"{"payload" : { "foo2":"bar2"}}"#)
             .await?;
         assert_eq!(
             t.get_webxdc_status_updates(instance.id, Some(id)).await?,
             r#"[{"payload":{"foo2":"bar2"}}]"#
         );
-        t.create_status_update_record(instance.id, "true").await?;
+        t.create_status_update_record(instance.id, r#"{"payload":true}"#)
+            .await?;
         assert_eq!(
             t.get_webxdc_status_updates(instance.id, None).await?,
             r#"[{"payload":{"foo":"bar"}},
 {"payload":{"foo2":"bar2"}},
 {"payload":true}]"#
+        );
+
+        let id = t
+            .create_status_update_record(
+                instance.id,
+                r#"{"payload" : 1, "sender": "that is not used"}"#,
+            )
+            .await?;
+        assert_eq!(
+            t.get_webxdc_status_updates(instance.id, Some(id)).await?,
+            r#"[{"payload":1}]"#
+        );
+
+        // TODO: legacy `PAYLOAD` support should be deleted soon
+        let id = t
+            .create_status_update_record(instance.id, r#"{"foo" : 1}"#)
+            .await?;
+        assert_eq!(
+            t.get_webxdc_status_updates(instance.id, Some(id)).await?,
+            r#"[{"payload":{"foo":1}}]"#
         );
 
         Ok(())
@@ -656,7 +718,11 @@ mod tests {
         assert!(!sent1.payload().contains("report-type=status-update"));
 
         let status_update_msg_id = alice
-            .send_webxdc_status_update(alice_instance.id, r#"{"foo":"bar"}"#, "descr text")
+            .send_webxdc_status_update(
+                alice_instance.id,
+                r#"{"payload" : {"foo":"bar"}}"#,
+                "descr text",
+            )
             .await?
             .unwrap();
         expect_status_update_event(&alice, alice_instance.id).await?;
@@ -682,7 +748,11 @@ mod tests {
         );
 
         alice
-            .send_webxdc_status_update(alice_instance.id, r#"{"snipp":"snapp"}"#, "bla text")
+            .send_webxdc_status_update(
+                alice_instance.id,
+                r#"{"payload":{"snipp":"snapp"}}"#,
+                "bla text",
+            )
             .await?
             .unwrap();
         assert_eq!(
@@ -738,7 +808,8 @@ mod tests {
             .await?
             .is_none());
 
-        t.send_webxdc_status_update(instance.id, "1", "bla").await?;
+        t.send_webxdc_status_update(instance.id, r#"{"payload": 1}"#, "bla")
+            .await?;
         assert!(t
             .render_webxdc_status_update_object(instance.id, None)
             .await?
@@ -767,12 +838,12 @@ mod tests {
         let mut alice_instance = alice_chat_id.get_draft(&alice).await?.unwrap();
 
         let status_update_msg_id = alice
-            .send_webxdc_status_update(alice_instance.id, r#"{"foo":"bar"}"#, "descr")
+            .send_webxdc_status_update(alice_instance.id, r#"{"payload": {"foo":"bar"}}"#, "descr")
             .await?;
         assert_eq!(status_update_msg_id, None);
         expect_status_update_event(&alice, alice_instance.id).await?;
         let status_update_msg_id = alice
-            .send_webxdc_status_update(alice_instance.id, r#"42"#, "descr")
+            .send_webxdc_status_update(alice_instance.id, r#"{"payload":42}"#, "descr")
             .await?;
         assert_eq!(status_update_msg_id, None);
 
