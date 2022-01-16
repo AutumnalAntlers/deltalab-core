@@ -110,9 +110,6 @@ pub enum Param {
     /// For Jobs
     AlsoMove = b'M',
 
-    /// For Jobs: space-separated list of message recipients
-    Recipients = b'R',
-
     /// For MDN-sending job
     MsgId = b'I',
 
@@ -171,6 +168,12 @@ pub enum Param {
 
     /// For Chats: timestamp of protection settings update.
     ProtectionSettingsTimestamp = b'L',
+
+    /// For Webxdc Message Instances: Current summary
+    WebxdcSummary = b'N',
+
+    /// For Webxdc Message Instances: timestamp of summary update.
+    WebxdcSummaryTimestamp = b'Q',
 }
 
 /// An object for handling key=value parameter lists.

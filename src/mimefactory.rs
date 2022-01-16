@@ -81,7 +81,7 @@ pub struct MimeFactory<'a> {
 /// Result of rendering a message, ready to be submitted to a send job.
 #[derive(Debug, Clone)]
 pub struct RenderedEmail {
-    pub message: Vec<u8>,
+    pub message: String,
     // pub envelope: Envelope,
     pub is_encrypted: bool,
     pub is_gossiped: bool,
@@ -765,7 +765,7 @@ impl<'a> MimeFactory<'a> {
         } = self;
 
         Ok(RenderedEmail {
-            message: outer_message.build().as_string().into_bytes(),
+            message: outer_message.build().as_string(),
             // envelope: Envelope::new,
             is_encrypted,
             is_gossiped,
@@ -1926,7 +1926,7 @@ mod tests {
 
         let rendered_msg = mimefactory.render(context).await.unwrap();
 
-        let mail = mailparse::parse_mail(&rendered_msg.message).unwrap();
+        let mail = mailparse::parse_mail(rendered_msg.message.as_bytes()).unwrap();
         assert_eq!(
             mail.headers
                 .iter()
@@ -1936,7 +1936,7 @@ mod tests {
             "1.0"
         );
 
-        let _mime_msg = MimeMessage::from_bytes(context, &rendered_msg.message)
+        let _mime_msg = MimeMessage::from_bytes(context, rendered_msg.message.as_bytes())
             .await
             .unwrap();
     }
@@ -2010,8 +2010,9 @@ mod tests {
         let mut msg = Message::new(Viewtype::Text);
         msg.set_text(Some("this is the text!".to_string()));
 
-        let payload = t.send_msg(chat.id, &mut msg).await.payload();
-        let mut payload = payload.splitn(3, "\r\n\r\n");
+        let sent_msg = t.send_msg(chat.id, &mut msg).await;
+        let mut payload = sent_msg.payload().splitn(3, "\r\n\r\n");
+
         let outer = payload.next().unwrap();
         let inner = payload.next().unwrap();
         let body = payload.next().unwrap();
@@ -2029,8 +2030,8 @@ mod tests {
 
         // if another message is sent, that one must not contain the avatar
         // and no artificial multipart/mixed nesting
-        let payload = t.send_msg(chat.id, &mut msg).await.payload();
-        let mut payload = payload.splitn(2, "\r\n\r\n");
+        let sent_msg = t.send_msg(chat.id, &mut msg).await;
+        let mut payload = sent_msg.payload().splitn(2, "\r\n\r\n");
         let outer = payload.next().unwrap();
         let body = payload.next().unwrap();
 
