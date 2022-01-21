@@ -11,10 +11,13 @@
 - added `DC_MSG_WEBXDC`, `dc_send_webxdc_status_update()`,
   `dc_get_webxdc_status_updates()`, `dc_msg_get_webxdc_blob()`,
   `dc_msg_get_webxdc_info()`, and `DC_EVENT_WEBXDC_STATUS_UPDATE` #2826
+- added `dc_msg_get_parent()` #2984
 
 - Add `dc_msg_force_plaintext()` API for bots #2847
 
 - allow to remove quotes on drafts `dc_msg_set_quote(msg, NULL)` #2950
+
+- Use second parameter of `dc_imex` to provide backup passphrase #2980
 
 #### Removed
 
