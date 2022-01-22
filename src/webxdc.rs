@@ -8,6 +8,7 @@ use crate::mimeparser::SystemMessage;
 use crate::param::Param;
 use crate::{chat, EventType};
 use anyhow::{bail, ensure, format_err, Result};
+use async_std::path::PathBuf;
 use lettre_email::mime::{self};
 use lettre_email::PartBuilder;
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,7 @@ const WEBXDC_DEFAULT_ICON: &str = "__webxdc__/default-icon.png";
 ///
 /// The limit is also an experiment to see how small we can go;
 /// it is planned to raise that limit as needed in subsequent versions.
-pub(crate) const WEBXDC_SENDING_LIMIT: usize = 102400;
+const WEBXDC_SENDING_LIMIT: usize = 102400;
 
 /// Be more tolerant for .xdc sizes on receiving -
 /// might be, the senders version uses already a larger limit
@@ -98,6 +99,7 @@ pub(crate) struct StatusUpdateItem {
 }
 
 impl Context {
+    /// check if a file is an acceptable webxdc for sending or receiving.
     pub(crate) async fn is_webxdc_file(&self, filename: &str, buf: &[u8]) -> Result<bool> {
         if filename.ends_with(WEBXDC_SUFFIX) {
             let reader = std::io::Cursor::new(buf);
@@ -106,17 +108,45 @@ impl Context {
                     if buf.len() <= WEBXDC_RECEIVING_LIMIT {
                         return Ok(true);
                     } else {
-                        error!(
+                        info!(
                             self,
-                            "{} exceeds acceptable size of {} bytes.",
+                            "{} exceeds receiving limit of {} bytes",
                             &filename,
-                            WEBXDC_SENDING_LIMIT
+                            WEBXDC_RECEIVING_LIMIT
                         );
                     }
+                } else {
+                    info!(self, "{} misses index.html", &filename);
                 }
+            } else {
+                info!(self, "{} cannot be opened as zip-file", &filename);
             }
         }
         Ok(false)
+    }
+
+    /// ensure that a file is an acceptable webxdc for sending
+    /// (sending has more strict size limits).
+    pub(crate) async fn ensure_sendable_webxdc_file(&self, path: &PathBuf) -> Result<()> {
+        let mut file = std::fs::File::open(path)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        if !self
+            .is_webxdc_file(path.to_str().unwrap_or_default(), &buf)
+            .await?
+        {
+            bail!(
+                "{} is not a valid webxdc file",
+                path.to_str().unwrap_or_default()
+            );
+        } else if buf.len() > WEBXDC_SENDING_LIMIT {
+            bail!(
+                "webxdc {} exceeds acceptable size of {} bytes",
+                path.to_str().unwrap_or_default(),
+                WEBXDC_SENDING_LIMIT
+            );
+        }
+        Ok(())
     }
 
     /// Takes an update-json as `{payload: PAYLOAD}` (or legacy `PAYLOAD`)
@@ -251,6 +281,7 @@ impl Context {
                     .ok_or_else(|| format_err!("Status object expected."))?,
                 );
                 status_update.set_quote(self, Some(&instance)).await?;
+                status_update.param.remove(Param::GuaranteeE2ee); // may be set by set_quote(), if #2985 is done, this line can be removed
                 let status_update_msg_id =
                     chat::send_msg(self, instance.chat_id, &mut status_update).await?;
                 Ok(Some(status_update_msg_id))
@@ -450,8 +481,10 @@ impl Message {
 mod tests {
     use super::*;
     use crate::chat::{
-        create_group_chat, forward_msgs, send_msg, send_text_msg, ChatId, ProtectionStatus,
+        add_contact_to_chat, create_group_chat, forward_msgs, send_msg, send_text_msg, ChatId,
+        ProtectionStatus,
     };
+    use crate::contact::Contact;
     use crate::dc_receive_imf::dc_receive_imf;
     use crate::test_utils::TestContext;
     use async_std::fs::File;
@@ -524,6 +557,7 @@ mod tests {
         )
         .await?;
         let instance_msg_id = send_msg(t, chat_id, &mut instance).await?;
+        assert_eq!(instance.viewtype, Viewtype::Webxdc);
         Message::load_from_db(t, instance_msg_id).await
     }
 
@@ -543,6 +577,38 @@ mod tests {
         File::create(&file)
             .await?
             .write_all("<html>ola!</html>".as_ref())
+            .await?;
+        let mut instance = Message::new(Viewtype::Webxdc);
+        instance.set_file(file.to_str().unwrap(), None);
+        assert!(send_msg(&t, chat_id, &mut instance).await.is_err());
+
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_send_invalid_webxdc() -> Result<()> {
+        let t = TestContext::new_alice().await;
+        let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo").await?;
+
+        // sending invalid .xdc as file is possible, but must not result in Viewtype::Webxdc
+        let mut instance = create_webxdc_instance(
+            &t,
+            "invalid-no-zip-but-7z.xdc",
+            include_bytes!("../test-data/webxdc/invalid-no-zip-but-7z.xdc"),
+        )
+        .await?;
+        let instance_id = send_msg(&t, chat_id, &mut instance).await?;
+        assert_eq!(instance.viewtype, Viewtype::File);
+        let test = Message::load_from_db(&t, instance_id).await?;
+        assert_eq!(test.viewtype, Viewtype::File);
+
+        // sending invalid .xdc as Viewtype::Webxdc should fail already on sending
+        let file = t.get_blobdir().join("invalid2.xdc");
+        File::create(&file)
+            .await?
+            .write_all(include_bytes!(
+                "../test-data/webxdc/invalid-no-zip-but-7z.xdc"
+            ))
             .await?;
         let mut instance = Message::new(Viewtype::Webxdc);
         instance.set_file(file.to_str().unwrap(), None);
@@ -1346,6 +1412,59 @@ sth_for_the = "future""#
                 .await?,
             r#"[{"payload":"sth. else","info":"this appears in-chat"}]"#
         );
+
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_webxdc_opportunistic_encryption() -> Result<()> {
+        let alice = TestContext::new_alice().await;
+        let bob = TestContext::new_bob().await;
+
+        // Bob sends sth. to Alice, Alice has Bob's key
+        let bob_chat_id = create_group_chat(&bob, ProtectionStatus::Unprotected, "chat").await?;
+        add_contact_to_chat(
+            &bob,
+            bob_chat_id,
+            Contact::create(&bob, "", "alice@example.org").await?,
+        )
+        .await?;
+        send_text_msg(&bob, bob_chat_id, "populate".to_string()).await?;
+        alice.recv_msg(&bob.pop_sent_msg().await).await;
+
+        // Alice sends instance+update to Bob
+        let alice_chat_id = alice.get_last_msg().await.chat_id;
+        alice_chat_id.accept(&alice).await?;
+        let alice_instance = send_webxdc_instance(&alice, alice_chat_id).await?;
+        let sent1 = &alice.pop_sent_msg().await;
+        let update_msg_id = alice
+            .send_webxdc_status_update(alice_instance.id, r#"{"payload":42}"#, "descr")
+            .await?
+            .unwrap();
+        let update_msg = Message::load_from_db(&alice, update_msg_id).await?;
+        let sent2 = &alice.pop_sent_msg().await;
+        assert!(alice_instance.get_showpadlock());
+        assert!(update_msg.get_showpadlock());
+
+        // Bob receives instance+update
+        bob.recv_msg(sent1).await;
+        let bob_instance = bob.get_last_msg().await;
+        bob.recv_msg(sent2).await;
+        assert!(bob_instance.get_showpadlock());
+
+        // Bob adds Claire with unknown key, update to Alice+Claire cannot be encrypted
+        add_contact_to_chat(
+            &bob,
+            bob_chat_id,
+            Contact::create(&bob, "", "claire@example.org").await?,
+        )
+        .await?;
+        let update_msg_id = bob
+            .send_webxdc_status_update(bob_instance.id, r#"{"payload":43}"#, "descr")
+            .await?
+            .unwrap();
+        let update_msg = Message::load_from_db(&bob, update_msg_id).await?;
+        assert!(!update_msg.get_showpadlock());
 
         Ok(())
     }

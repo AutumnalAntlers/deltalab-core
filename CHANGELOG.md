@@ -35,7 +35,8 @@
 - sql: enable `auto_vacuum=INCREMENTAL` #2931
 - Synchronize Seen status across devices #2942
 - Add API to set the database password #2956
-- Add webXdc #2826
+- Add information about whether the database is encrypted or not to `dc_get_info()` #3000
+- Add Webxdc #2826 #2971 #2975 #2977 #2979 #2993 #2998
 
 ### Changed
 - selfstatus now defaults to empty
