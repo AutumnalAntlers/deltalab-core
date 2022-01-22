@@ -36,7 +36,7 @@
 - Synchronize Seen status across devices #2942
 - Add API to set the database password #2956
 - Add information about whether the database is encrypted or not to `dc_get_info()` #3000
-- Add Webxdc #2826 #2971 #2975 #2977 #2979 #2993 #2998
+- Add Webxdc #2826 #2971 #2975 #2977 #2979 #2993 #2998 #3001
 
 ### Changed
 - selfstatus now defaults to empty
@@ -48,6 +48,7 @@
 - allow removing quotes on existing drafts (#2950)
 - update provider database (11 Jan 2022) #2959
 - python: allow timeout for internal configure tracker API #2967
+- Replace `SendMsgToSmtp` jobs which stored outgoing messages in blobdir with `smtp` SQL table #2939 #2966
 
 ### Fixed
 - Fix: Make `add_parts()` not early-exit #2879
