@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+- don't watch Sent folder by default #3025
+- use webxdc app name in chatlist/quotes/replies etc. #3027
+- refactorings #3023
+
+
 ## 1.72.0
 
 ### Fixes
