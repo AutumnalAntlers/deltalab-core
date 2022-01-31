@@ -6,6 +6,15 @@
 - don't watch Sent folder by default #3025
 - use webxdc app name in chatlist/quotes/replies etc. #3027
 - refactorings #3023
+- remove direct dependency on `byteorder` crate #3031
+- make it possible to cancel message sending by removing the message #3034,
+  this was previosuly removed in 1.71.0 #2939
+
+### Fixes
+- fix splitting off text from webxdc messages #3032
+- call slow `delete_expired_imap_messages()` less often #3037
+- make synchronization of Seen status more robust in case unsolicited FETCH
+  result without UID is returned #3022
 
 
 ## 1.72.0
