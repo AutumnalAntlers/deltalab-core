@@ -458,12 +458,9 @@ impl Imap {
             .await
             .context("fetch_new_messages")?;
 
-        self.move_messages(context, watch_folder)
+        self.move_delete_messages(context, watch_folder)
             .await
-            .context("move_messages")?;
-        self.delete_messages(context, watch_folder)
-            .await
-            .context("delete_messages")?;
+            .context("move_delete_messages")?;
 
         Ok(())
     }
@@ -751,6 +748,11 @@ impl Imap {
             // message, move it to the movebox and then download the second message before
             // downloading the first one, if downloading from inbox before moving is allowed.
             if folder == target
+                // Never download messages directly from the spam folder.
+                // If the sender is known, the message will be moved to the Inbox or Mvbox
+                // and then we download the message from there.
+                // Also see `spam_target_folder()`.
+                && !context.is_spam_folder(folder).await?
                 && prefetch_should_download(
                     context,
                     &headers,
@@ -825,6 +827,37 @@ impl Imap {
         chat::mark_old_messages_as_noticed(context, received_msgs).await?;
 
         Ok(read_cnt > 0)
+    }
+
+    /// Deletes batch of messages identified by their UID from the currently
+    /// selected folder.
+    async fn delete_message_batch(
+        &mut self,
+        context: &Context,
+        uid_set: &str,
+        row_ids: Vec<i64>,
+    ) -> Result<()> {
+        // mark the message for deletion
+        self.add_flag_finalized_with_set(uid_set, "\\Deleted")
+            .await?;
+        context
+            .sql
+            .execute(
+                format!(
+                    "DELETE FROM imap WHERE id IN ({})",
+                    row_ids.iter().map(|_| "?").collect::<Vec<&str>>().join(",")
+                ),
+                rusqlite::params_from_iter(row_ids),
+            )
+            .await
+            .context("cannot remove deleted messages from imap table")?;
+
+        context.emit_event(EventType::ImapMessageDeleted(format!(
+            "IMAP messages {} marked as deleted",
+            uid_set
+        )));
+        self.config.selected_folder_needs_expunge = true;
+        Ok(())
     }
 
     /// Moves batch of messages identified by their UID from the currently
@@ -907,17 +940,16 @@ impl Imap {
         }
     }
 
-    /// Moves messages.
+    /// Moves and deletes messages as planned in the `imap` table.
     ///
-    /// This is the only place where messages are moved on the IMAP server.
-    async fn move_messages(&mut self, context: &Context, folder: &str) -> Result<()> {
+    /// This is the only place where messages are moved or deleted on the IMAP server.
+    async fn move_delete_messages(&mut self, context: &Context, folder: &str) -> Result<()> {
         let mut rows = context
             .sql
             .query_map(
                 "SELECT id, uid, target FROM imap
         WHERE folder = ?
         AND target != folder
-        AND target != '' -- Not planned for deletion.
         ORDER BY target, uid",
                 paramsv![folder],
                 |row| {
@@ -970,57 +1002,20 @@ impl Imap {
                 }
             }
 
-            // Execute request.
-            self.move_message_batch(context, &uid_set, rowid_set, &target)
-                .await
-                .with_context(|| {
-                    format!(
-                        "cannot move batch of messages {:?} to folder {:?}",
-                        &uid_set, target
-                    )
-                })?;
-        }
-
-        Ok(())
-    }
-
-    /// Deletes messages that are marked as planned for deletion in `imap` table.
-    ///
-    /// This is the only place where messages are deleted from the IMAP server.
-    async fn delete_messages(&mut self, context: &Context, folder: &str) -> Result<()> {
-        let rows = context
-            .sql
-            .query_map(
-                "SELECT id, uid FROM imap
-                WHERE folder=? AND target=''
-                ORDER BY uid ASC
-                LIMIT 50", // Do not try to delete too many messages at once.
-                paramsv![folder],
-                |row| {
-                    let rowid: i64 = row.get(0)?;
-                    let uid: u32 = row.get(1)?;
-                    Ok((rowid, uid))
-                },
-                |rows| rows.collect::<Result<Vec<_>, _>>().map_err(Into::into),
-            )
-            .await?;
-
-        if rows.is_empty() {
-            return Ok(());
-        }
-
-        for (rowid, uid) in rows {
-            match self.delete_msg(context, folder, uid).await {
-                ImapActionResult::Failed | ImapActionResult::RetryLater => {
-                    warn!(context, "Deletion of message {}/{} failed", folder, uid);
-                    break;
-                }
-                ImapActionResult::Success => {
-                    context
-                        .sql
-                        .execute("DELETE FROM imap WHERE id=?", paramsv![rowid])
-                        .await?;
-                }
+            // Empty target folder name means messages should be deleted.
+            if target.is_empty() {
+                self.delete_message_batch(context, &uid_set, rowid_set)
+                    .await
+                    .with_context(|| format!("cannot delete batch of messages {:?}", &uid_set))?;
+            } else {
+                self.move_message_batch(context, &uid_set, rowid_set, &target)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "cannot move batch of messages {:?} to folder {:?}",
+                            &uid_set, target
+                        )
+                    })?;
             }
         }
 
@@ -1449,39 +1444,6 @@ impl Imap {
         }
     }
 
-    pub async fn delete_msg(
-        &mut self,
-        context: &Context,
-        folder: &str,
-        uid: u32,
-    ) -> ImapActionResult {
-        if let Some(imapresult) = self
-            .prepare_imap_operation_on_msg(context, folder, uid)
-            .await
-        {
-            return imapresult;
-        }
-        // we are connected, and the folder is selected
-
-        let display_imap_id = format!("{}/{}", folder, uid);
-
-        // mark the message for deletion
-        if let Err(err) = self.add_flag_finalized(uid, "\\Deleted").await {
-            warn!(
-                context,
-                "Cannot mark message {} as \"Deleted\": {}.", display_imap_id, err
-            );
-            ImapActionResult::RetryLater
-        } else {
-            context.emit_event(EventType::ImapMessageDeleted(format!(
-                "IMAP Message {} marked as deleted",
-                display_imap_id
-            )));
-            self.config.selected_folder_needs_expunge = true;
-            ImapActionResult::Success
-        }
-    }
-
     pub async fn ensure_configured_folders(
         &mut self,
         context: &Context,
@@ -1641,16 +1603,28 @@ impl Imap {
     }
 }
 
-/// Returns target folder for a message found in the Spam folder.
-async fn spam_target_folder(
+async fn should_move_out_of_spam(
     context: &Context,
-    folder: &str,
     headers: &[mailparse::MailHeader<'_>],
-) -> Result<Option<Config>> {
-    if let Some(chat) = prefetch_get_chat(context, headers).await? {
-        if chat.blocked != Blocked::Not {
+) -> Result<bool> {
+    if headers.get_header_value(HeaderDef::ChatVersion).is_some() {
+        // If this is a chat message (i.e. has a ChatVersion header), then this might be
+        // a securejoin message. We can't find out at this point as we didn't prefetch
+        // the SecureJoin header. So, we always move chat messages out of Spam.
+        // Two possibilities to change this would be:
+        // 1. Remove the `&& !context.is_spam_folder(folder).await?` check from
+        // `fetch_new_messages()`, and then let `dc_receive_imf()` check
+        // if it's a spam message and should be hidden.
+        // 2. Or add a flag to the ChatVersion header that this is a securejoin
+        // request, and return `true` here only if the message has this flag.
+        // `dc_receive_imf()` can then check if the securejoin request is valid.
+        return Ok(true);
+    }
+
+    if let Some(msg) = get_prefetch_parent_message(context, headers).await? {
+        if msg.chat_blocked != Blocked::Not {
             // Blocked or contact request message in the spam folder, leave it there.
-            return Ok(None);
+            return Ok(false);
         }
     } else {
         // No chat found.
@@ -1658,22 +1632,38 @@ async fn spam_target_folder(
             from_field_to_contact_id(context, &mimeparser::get_from(headers), true).await?;
         if blocked_contact {
             // Contact is blocked, leave the message in spam.
-            return Ok(None);
+            return Ok(false);
         }
 
         if let Some(chat_id_blocked) = ChatIdBlocked::lookup_by_contact(context, from_id).await? {
             if chat_id_blocked.blocked != Blocked::Not {
-                return Ok(None);
+                return Ok(false);
             }
         } else if from_id != DC_CONTACT_ID_SELF {
             // No chat with this contact found.
-            return Ok(None);
+            return Ok(false);
         }
     }
 
+    Ok(true)
+}
+
+/// Returns target folder for a message found in the Spam folder.
+/// If this returns None, the message will not be moved out of the
+/// Spam folder, and as `fetch_new_messages()` doesn't download
+/// messages from the Spam folder, the message will be ignored.
+async fn spam_target_folder(
+    context: &Context,
+    folder: &str,
+    headers: &[mailparse::MailHeader<'_>],
+) -> Result<Option<Config>> {
+    if !should_move_out_of_spam(context, headers).await? {
+        return Ok(None);
+    }
+
     if needs_move_to_mvbox(context, headers).await?
-        // We don't want to move the message to the inbox or sentbox where we wouldn't
-        // fetch it again:
+        // If OnlyFetchMvbox is set, we don't want to move the message to
+        // the inbox or sentbox where we wouldn't fetch it again:
         || context.get_config_bool(Config::OnlyFetchMvbox).await?
     {
         Ok(Some(Config::ConfiguredMvboxFolder))
@@ -2426,7 +2416,7 @@ mod tests {
         ("Spam", true, true, "DeltaChat"),
     ];
 
-    // These are the same as above, but all messages in Spam stay in Spam
+    // These are the same as above, but non-chat messages in Spam stay in Spam
     const COMBINATIONS_REQUEST: &[(&str, bool, bool, &str)] = &[
         ("INBOX", false, false, "INBOX"),
         ("INBOX", false, true, "INBOX"),
@@ -2437,9 +2427,9 @@ mod tests {
         ("Sent", true, false, "Sent"),
         ("Sent", true, true, "DeltaChat"),
         ("Spam", false, false, "Spam"),
-        ("Spam", false, true, "Spam"),
+        ("Spam", false, true, "INBOX"),
         ("Spam", true, false, "Spam"),
-        ("Spam", true, true, "Spam"),
+        ("Spam", true, true, "DeltaChat"),
     ];
 
     #[async_std::test]
