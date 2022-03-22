@@ -441,13 +441,6 @@ async fn import_backup(
     backup_to_import: &Path,
     passphrase: String,
 ) -> Result<()> {
-    info!(
-        context,
-        "Import \"{}\" to \"{}\".",
-        backup_to_import.display(),
-        context.get_dbfile().display()
-    );
-
     ensure!(
         !context.is_configured().await?,
         "Cannot import backups to accounts in use."
@@ -459,6 +452,16 @@ async fn import_backup(
 
     let backup_file = File::open(backup_to_import).await?;
     let file_size = backup_file.metadata().await?.len();
+    info!(
+        context,
+        "Import \"{}\" ({} bytes) to \"{}\".",
+        backup_to_import.display(),
+        file_size,
+        context.get_dbfile().display()
+    );
+
+    context.sql.config_cache.write().await.clear();
+
     let archive = Archive::new(backup_file);
 
     let mut entries = archive.entries()?;
@@ -898,6 +901,54 @@ mod tests {
         if let Err(err) = imex(&context2.ctx, ImexMode::ImportSelfKeys, blobdir, None).await {
             panic!("got error on import: {:?}", err);
         }
+    }
+
+    #[async_std::test]
+    async fn test_export_and_import_backup() -> Result<()> {
+        let backup_dir = tempfile::tempdir().unwrap();
+
+        let context1 = TestContext::new_alice().await;
+        assert!(context1.is_configured().await?);
+
+        let context2 = TestContext::new().await;
+        assert!(!context2.is_configured().await?);
+        assert!(has_backup(&context2, backup_dir.path().as_ref())
+            .await
+            .is_err());
+
+        // export from context1
+        assert!(imex(
+            &context1,
+            ImexMode::ExportBackup,
+            backup_dir.path().as_ref(),
+            None,
+        )
+        .await
+        .is_ok());
+        let _event = context1
+            .evtracker
+            .get_matching(|evt| matches!(evt, EventType::ImexProgress(1000)))
+            .await;
+
+        // import to context2
+        let backup = has_backup(&context2, backup_dir.path().as_ref()).await?;
+        assert!(
+            imex(&context2, ImexMode::ImportBackup, backup.as_ref(), None)
+                .await
+                .is_ok()
+        );
+        let _event = context2
+            .evtracker
+            .get_matching(|evt| matches!(evt, EventType::ImexProgress(1000)))
+            .await;
+
+        assert!(context2.is_configured().await?);
+        assert_eq!(
+            context2.get_config(Config::Addr).await?,
+            Some("alice@example.org".to_string())
+        );
+
+        Ok(())
     }
 
     #[test]
