@@ -7,12 +7,13 @@ use quick_xml::events::{BytesEnd, BytesStart, BytesText};
 
 use crate::chat::{self, ChatId};
 use crate::config::Config;
-use crate::constants::{Viewtype, DC_CONTACT_ID_SELF};
+use crate::constants::DC_CONTACT_ID_SELF;
+use crate::contact::ContactId;
 use crate::context::Context;
 use crate::dc_tools::time;
 use crate::events::EventType;
 use crate::job::{self, Job};
-use crate::message::{Message, MsgId};
+use crate::message::{Message, MsgId, Viewtype};
 use crate::mimeparser::SystemMessage;
 use crate::param::Params;
 use crate::stock_str;
@@ -25,7 +26,7 @@ pub struct Location {
     pub longitude: f64,
     pub accuracy: f64,
     pub timestamp: i64,
-    pub contact_id: u32,
+    pub contact_id: ContactId,
     pub msg_id: u32,
     pub chat_id: ChatId,
     pub marker: Option<String>,
@@ -101,10 +102,10 @@ impl Kml {
             let val = event.unescape_and_decode(reader).unwrap_or_default();
 
             let val = val
-                .replace("\n", "")
-                .replace("\r", "")
-                .replace("\t", "")
-                .replace(" ", "");
+                .replace('\n', "")
+                .replace('\r', "")
+                .replace('\t', "")
+                .replace(' ', "");
 
             if self.tag.contains(KmlTag::WHEN) && val.len() >= 19 {
                 // YYYY-MM-DDTHH:MM:SSZ
@@ -558,7 +559,7 @@ pub async fn set_msg_location_id(context: &Context, msg_id: MsgId, location_id: 
 pub(crate) async fn save(
     context: &Context,
     chat_id: ChatId,
-    contact_id: u32,
+    contact_id: ContactId,
     locations: &[Location],
     independent: bool,
 ) -> Result<Option<u32>> {
@@ -585,12 +586,12 @@ pub(crate) async fn save(
             conn.prepare_cached("SELECT id FROM locations WHERE timestamp=? AND from_id=?")?;
         let mut stmt_insert = conn.prepare_cached(stmt_insert)?;
 
-        let exists = stmt_test.exists(paramsv![timestamp, contact_id as i32])?;
+        let exists = stmt_test.exists(paramsv![timestamp, contact_id])?;
 
         if independent || !exists {
             stmt_insert.execute(paramsv![
                 timestamp,
-                contact_id as i32,
+                contact_id,
                 chat_id,
                 latitude,
                 longitude,

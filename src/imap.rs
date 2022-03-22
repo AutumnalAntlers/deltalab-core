@@ -17,30 +17,31 @@ use async_std::channel::Receiver;
 use async_std::prelude::*;
 use num_traits::FromPrimitive;
 
-use crate::chat;
-use crate::chat::ChatId;
-use crate::chat::ChatIdBlocked;
+use crate::chat::{self, ChatId, ChatIdBlocked};
+use crate::config::Config;
 use crate::constants::{
-    Blocked, Chattype, ShowEmails, Viewtype, DC_CONTACT_ID_SELF, DC_FETCH_EXISTING_MSGS_COUNT,
+    Blocked, Chattype, ShowEmails, DC_CONTACT_ID_SELF, DC_FETCH_EXISTING_MSGS_COUNT,
     DC_FOLDERS_CONFIGURED_VERSION, DC_LP_AUTH_OAUTH2,
 };
 use crate::context::Context;
 use crate::dc_receive_imf::{
     dc_receive_imf_inner, from_field_to_contact_id, get_prefetch_parent_message, ReceivedMsg,
 };
+use crate::dc_tools::dc_create_id;
 use crate::events::EventType;
 use crate::headerdef::{HeaderDef, HeaderDefMap};
 use crate::job::{self, Action};
-use crate::login_param::{CertificateChecks, LoginParam, ServerLoginParam};
-use crate::login_param::{ServerAddress, Socks5Config};
-use crate::message::{self, Message, MessageState, MessengerMessage, MsgId};
+use crate::login_param::{
+    CertificateChecks, LoginParam, ServerAddress, ServerLoginParam, Socks5Config,
+};
+use crate::message::{self, Message, MessageState, MessengerMessage, MsgId, Viewtype};
 use crate::mimeparser;
 use crate::oauth2::dc_get_oauth2_access_token;
 use crate::param::Params;
 use crate::provider::Socket;
+use crate::scheduler::connectivity::ConnectivityStore;
 use crate::scheduler::InterruptInfo;
 use crate::stock_str;
-use crate::{config::Config, scheduler::connectivity::ConnectivityStore};
 
 mod client;
 mod idle;
@@ -69,6 +70,7 @@ pub enum ImapActionResult {
 ///   not necessarily sent by Delta Chat.
 const PREFETCH_FLAGS: &str = "(UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (\
                               MESSAGE-ID \
+                              X-MICROSOFT-ORIGINAL-MESSAGE-ID \
                               FROM \
                               IN-REPLY-TO REFERENCES \
                               CHAT-VERSION \
@@ -494,9 +496,8 @@ impl Imap {
             let msg = fetch?;
 
             // Get Message-ID
-            let message_id = get_fetch_headers(&msg)
-                .and_then(|headers| prefetch_get_message_id(&headers))
-                .ok();
+            let message_id =
+                get_fetch_headers(&msg).map_or(None, |headers| prefetch_get_message_id(&headers));
 
             if let (Some(uid), Some(rfc724_mid)) = (msg.uid, message_id) {
                 msg_ids.insert(uid, rfc724_mid);
@@ -688,6 +689,7 @@ impl Imap {
         let download_limit = context.download_limit().await?;
         let mut uids_fetch_fully = Vec::with_capacity(msgs.len());
         let mut uids_fetch_partially = Vec::with_capacity(msgs.len());
+        let mut uid_message_ids = BTreeMap::new();
         let mut largest_uid_skipped = None;
 
         // Store the info about IMAP messages in the database.
@@ -700,7 +702,8 @@ impl Imap {
                 }
             };
 
-            let message_id = prefetch_get_message_id(&headers).unwrap_or_default();
+            // Get the Message-ID or generate a fake one to identify the message in the database.
+            let message_id = prefetch_get_message_id(&headers).unwrap_or_else(dc_create_id);
 
             let target = match target_folder(context, folder, &headers).await? {
                 Some(config) => match context.get_config(config).await? {
@@ -772,6 +775,7 @@ impl Imap {
                     }
                     None => uids_fetch_fully.push(uid),
                 }
+                uid_message_ids.insert(uid, message_id);
             } else {
                 largest_uid_skipped = Some(uid);
             }
@@ -787,6 +791,7 @@ impl Imap {
                 context,
                 folder,
                 uids_fetch_fully,
+                &uid_message_ids,
                 false,
                 fetch_existing_msgs,
             )
@@ -797,6 +802,7 @@ impl Imap {
                 context,
                 folder,
                 uids_fetch_partially,
+                &uid_message_ids,
                 true,
                 fetch_existing_msgs,
             )
@@ -1232,6 +1238,7 @@ impl Imap {
         context: &Context,
         folder: &str,
         server_uids: Vec<u32>,
+        uid_message_ids: &BTreeMap<u32, String>,
         fetch_partially: bool,
         fetching_existing_messages: bool,
     ) -> Result<(Option<u32>, Vec<ReceivedMsg>)> {
@@ -1314,8 +1321,19 @@ impl Imap {
                     .context("we checked that message has body right above, but it has vanished")?;
                 let is_seen = msg.flags().any(|flag| flag == Flag::Seen);
 
+                let rfc724_mid = if let Some(rfc724_mid) = &uid_message_ids.get(&server_uid) {
+                    rfc724_mid
+                } else {
+                    warn!(
+                        context,
+                        "No Message-ID corresponding to UID {} passed in uid_messsage_ids",
+                        server_uid
+                    );
+                    ""
+                };
                 match dc_receive_imf_inner(
                     &context,
+                    rfc724_mid,
                     body,
                     &folder,
                     is_seen,
@@ -1654,7 +1672,6 @@ async fn should_move_out_of_spam(
 /// messages from the Spam folder, the message will be ignored.
 async fn spam_target_folder(
     context: &Context,
-    folder: &str,
     headers: &[mailparse::MailHeader<'_>],
 ) -> Result<Option<Config>> {
     if !should_move_out_of_spam(context, headers).await? {
@@ -1667,8 +1684,6 @@ async fn spam_target_folder(
         || context.get_config_bool(Config::OnlyFetchMvbox).await?
     {
         Ok(Some(Config::ConfiguredMvboxFolder))
-    } else if needs_move_to_sentbox(context, folder, headers).await? {
-        Ok(Some(Config::ConfiguredSentboxFolder))
     } else {
         Ok(Some(Config::ConfiguredInboxFolder))
     }
@@ -1686,11 +1701,9 @@ pub async fn target_folder(
     }
 
     if context.is_spam_folder(folder).await? {
-        spam_target_folder(context, folder, headers).await
+        spam_target_folder(context, headers).await
     } else if needs_move_to_mvbox(context, headers).await? {
         Ok(Some(Config::ConfiguredMvboxFolder))
-    } else if needs_move_to_sentbox(context, folder, headers).await? {
-        Ok(Some(Config::ConfiguredSentboxFolder))
     } else {
         Ok(None)
     }
@@ -1723,44 +1736,6 @@ async fn needs_move_to_mvbox(
     } else {
         Ok(false)
     }
-}
-
-async fn prefetch_is_outgoing(
-    context: &Context,
-    headers: &[mailparse::MailHeader<'_>],
-) -> Result<bool> {
-    let from_address_list = &mimeparser::get_from(headers);
-
-    // Only looking at the first address in the `From:` field.
-    if let Some(info) = from_address_list.first() {
-        if context.is_self_addr(&info.addr).await? {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    } else {
-        Ok(false)
-    }
-}
-
-async fn needs_move_to_sentbox(
-    context: &Context,
-    folder: &str,
-    headers: &[mailparse::MailHeader<'_>],
-) -> Result<bool> {
-    let needs_move = context.get_config_bool(Config::SentboxMove).await?
-        && context
-            .get_config(Config::ConfiguredSentboxFolder)
-            .await?
-            .is_some()
-        && context.is_inbox(folder).await?
-        && headers.get_header_value(HeaderDef::ChatVersion).is_some()
-        && headers
-            .get_header_value(HeaderDef::AutocryptSetupMessage)
-            .is_none()
-        && prefetch_is_outgoing(context, headers).await?;
-
-    Ok(needs_move)
 }
 
 /// Try to get the folder meaning by the name of the folder only used if the server does not support XLIST.
@@ -1884,13 +1859,13 @@ fn get_fetch_headers(prefetch_msg: &Fetch) -> Result<Vec<mailparse::MailHeader>>
     }
 }
 
-fn prefetch_get_message_id(headers: &[mailparse::MailHeader]) -> Result<String> {
+fn prefetch_get_message_id(headers: &[mailparse::MailHeader]) -> Option<String> {
     if let Some(message_id) = headers.get_header_value(HeaderDef::XMicrosoftOriginalMessageId) {
-        Ok(crate::mimeparser::parse_message_id(&message_id)?)
+        crate::mimeparser::parse_message_id(&message_id).ok()
     } else if let Some(message_id) = headers.get_header_value(HeaderDef::MessageId) {
-        Ok(crate::mimeparser::parse_message_id(&message_id)?)
+        crate::mimeparser::parse_message_id(&message_id).ok()
     } else {
-        bail!("prefetch: No message ID found");
+        None
     }
 }
 
@@ -2040,6 +2015,12 @@ async fn mark_seen_by_uid(
             > 0;
 
         if updated {
+            msg_id
+                .start_ephemeral_timer(context)
+                .await
+                .with_context(|| {
+                    format!("failed to start ephemeral timer for message {}", msg_id)
+                })?;
             Ok(Some(chat_id))
         } else {
             // Message state has not chnaged.
@@ -2330,7 +2311,6 @@ mod tests {
         accepted_chat: bool,
         outgoing: bool,
         setupmessage: bool,
-        sentbox_move: bool,
     ) -> Result<()> {
         println!("Testing: For folder {}, mvbox_move {}, chat_msg {}, accepted {}, outgoing {}, setupmessage {}",
                                folder, mvbox_move, chat_msg, accepted_chat, outgoing, setupmessage);
@@ -2349,9 +2329,6 @@ mod tests {
             .set_config(Config::MvboxMove, Some(if mvbox_move { "1" } else { "0" }))
             .await?;
         t.ctx.set_config(Config::ShowEmails, Some("2")).await?;
-        t.ctx
-            .set_config_bool(Config::SentboxMove, sentbox_move)
-            .await?;
 
         if accepted_chat {
             let contact_id = Contact::create(&t.ctx, "", "bob@example.net").await?;
@@ -2443,7 +2420,6 @@ mod tests {
                 true,
                 false,
                 false,
-                false,
             )
             .await?;
         }
@@ -2461,7 +2437,6 @@ mod tests {
                 false,
                 false,
                 false,
-                false,
             )
             .await?;
         }
@@ -2470,26 +2445,18 @@ mod tests {
 
     #[async_std::test]
     async fn test_target_folder_outgoing() -> Result<()> {
-        for sentbox_move in &[true, false] {
-            // Test outgoing emails
-            for (folder, mvbox_move, chat_msg, mut expected_destination) in
-                COMBINATIONS_ACCEPTED_CHAT
-            {
-                if *folder == "INBOX" && !mvbox_move && *chat_msg && *sentbox_move {
-                    expected_destination = "Sent"
-                }
-                check_target_folder_combination(
-                    folder,
-                    *mvbox_move,
-                    *chat_msg,
-                    expected_destination,
-                    true,
-                    true,
-                    false,
-                    *sentbox_move,
-                )
-                .await?;
-            }
+        // Test outgoing emails
+        for (folder, mvbox_move, chat_msg, expected_destination) in COMBINATIONS_ACCEPTED_CHAT {
+            check_target_folder_combination(
+                folder,
+                *mvbox_move,
+                *chat_msg,
+                expected_destination,
+                true,
+                true,
+                false,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -2506,7 +2473,6 @@ mod tests {
                 false,
                 true,
                 true,
-                false,
             )
             .await?;
         }

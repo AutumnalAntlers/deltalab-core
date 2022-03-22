@@ -15,11 +15,11 @@ use rusqlite::{config::DbConfig, Connection, OpenFlags};
 use crate::blob::BlobObject;
 use crate::chat::{add_device_msg, update_device_icon, update_saved_messages_icon};
 use crate::config::Config;
-use crate::constants::{Viewtype, DC_CHAT_ID_TRASH};
+use crate::constants::DC_CHAT_ID_TRASH;
 use crate::context::Context;
 use crate::dc_tools::{dc_delete_file, time};
 use crate::ephemeral::start_ephemeral_timers;
-use crate::message::Message;
+use crate::message::{Message, Viewtype};
 use crate::param::{Param, Params};
 use crate::peerstate::{deduplicate_peerstates, Peerstate};
 use crate::stock_str;
@@ -795,6 +795,19 @@ async fn prune_tombstones(sql: &Sql) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+/// Helper function to return comma-separated sequence of `?` chars.
+///
+/// Use this together with [`rusqlite::ParamsFromIter`] to use dynamically generated
+/// parameter lists.
+pub fn repeat_vars(count: usize) -> Result<String> {
+    if count == 0 {
+        bail!("Must have at least one repeat variable");
+    }
+    let mut s = "?,".repeat(count);
+    s.pop(); // Remove trailing comma
+    Ok(s)
 }
 
 #[cfg(test)]

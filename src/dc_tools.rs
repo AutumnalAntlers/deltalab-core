@@ -21,10 +21,10 @@ use mailparse::MailHeaderMap;
 use rand::{thread_rng, Rng};
 
 use crate::chat::{add_device_msg, add_device_msg_with_importance};
-use crate::constants::{Viewtype, DC_ELLIPSIS, DC_OUTDATED_WARNING_DAYS};
+use crate::constants::{DC_ELLIPSIS, DC_OUTDATED_WARNING_DAYS};
 use crate::context::Context;
 use crate::events::EventType;
-use crate::message::Message;
+use crate::message::{Message, Viewtype};
 use crate::provider::get_provider_update_timestamp;
 use crate::stock_str;
 
@@ -534,8 +534,8 @@ impl rusqlite::types::ToSql for EmailAddress {
 /// Makes sure that a user input that is not supposed to contain newlines does not contain newlines.
 pub(crate) fn improve_single_line_input(input: &str) -> String {
     input
-        .replace("\n", " ")
-        .replace("\r", " ")
+        .replace('\n', " ")
+        .replace('\r', " ")
         .trim()
         .to_string()
 }

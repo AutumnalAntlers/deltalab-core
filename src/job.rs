@@ -9,7 +9,7 @@ use deltachat_derive::{FromSql, ToSql};
 use rand::{thread_rng, Rng};
 
 use crate::config::Config;
-use crate::contact::{normalize_name, Contact, Modifier, Origin};
+use crate::contact::{normalize_name, Contact, ContactId, Modifier, Origin};
 use crate::context::Context;
 use crate::dc_tools::time;
 use crate::events::EventType;
@@ -224,7 +224,7 @@ impl Job {
     async fn get_additional_mdn_jobs(
         &self,
         context: &Context,
-        contact_id: u32,
+        contact_id: ContactId,
     ) -> Result<(Vec<u32>, Vec<String>)> {
         // Extract message IDs from job parameters
         let res: Vec<(u32, MsgId)> = context
@@ -271,7 +271,7 @@ impl Job {
             return Status::Finished(Err(format_err!("MDNs are disabled")));
         }
 
-        let contact_id = self.foreign_id;
+        let contact_id = ContactId::new(self.foreign_id);
         let contact = job_try!(Contact::load_from_db(context, contact_id).await);
         if contact.is_blocked() {
             return Status::Finished(Err(format_err!("Contact is blocked")));
@@ -365,29 +365,38 @@ impl Job {
         Status::Finished(Ok(()))
     }
 
-    /// Synchronizes UIDs for sentbox, inbox and mvbox.
+    /// Synchronizes UIDs for all folders.
     async fn resync_folders(&mut self, context: &Context, imap: &mut Imap) -> Status {
         if let Err(err) = imap.prepare(context).await {
             warn!(context, "could not connect: {:?}", err);
             return Status::RetryLater;
         }
 
-        let sentbox_folder = job_try!(context.get_config(Config::ConfiguredSentboxFolder).await);
-        if let Some(sentbox_folder) = sentbox_folder {
-            job_try!(imap.resync_folder_uids(context, sentbox_folder).await);
+        let all_folders = match imap.list_folders(context).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(context, "Listing folders for resync failed: {:#}", e);
+                return Status::RetryLater;
+            }
+        };
+
+        let mut any_failed = false;
+
+        for folder in all_folders {
+            if let Err(e) = imap
+                .resync_folder_uids(context, folder.name().to_string())
+                .await
+            {
+                warn!(context, "{:#}", e);
+                any_failed = true;
+            }
         }
 
-        let inbox_folder = job_try!(context.get_config(Config::ConfiguredInboxFolder).await);
-        if let Some(inbox_folder) = inbox_folder {
-            job_try!(imap.resync_folder_uids(context, inbox_folder).await);
+        if any_failed {
+            Status::RetryLater
+        } else {
+            Status::Finished(Ok(()))
         }
-
-        let mvbox_folder = job_try!(context.get_config(Config::ConfiguredMvboxFolder).await);
-        if let Some(mvbox_folder) = mvbox_folder {
-            job_try!(imap.resync_folder_uids(context, mvbox_folder).await);
-        }
-
-        Status::Finished(Ok(()))
     }
 
     async fn markseen_msg_on_imap(&mut self, context: &Context, imap: &mut Imap) -> Status {
@@ -685,7 +694,11 @@ async fn send_mdn(context: &Context, msg: &Message) -> Result<()> {
     let mut param = Params::new();
     param.set(Param::MsgId, msg.id.to_u32().to_string());
 
-    add(context, Job::new(Action::SendMdn, msg.from_id, param, 0)).await?;
+    add(
+        context,
+        Job::new(Action::SendMdn, msg.from_id.to_u32(), param, 0),
+    )
+    .await?;
 
     Ok(())
 }

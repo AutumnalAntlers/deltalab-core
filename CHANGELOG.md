@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### API changes
+- change semantics of `dc_get_webxdc_status_updates()` second parameter
+  and remove update-id from `DC_EVENT_WEBXDC_STATUS_UPDATE` #3081
+
+### Fixes
+- Hopefully fix a bug where outgoing messages appear twice with Amazon SES #3077
+- do not delete messages without Message-IDs as duplicates #3095
+- Assign replies from a different email address to the correct chat #3119
+- start ephemeral timer when seen status is synchronized via IMAP #3122
+
+### Changes
+- add more SMTP logging #3093
+- place common headers like `From:` before the large `Autocrypt:` header #3079
+- keep track of securejoin joiner status in database to survive restarts #2920
+- remove never used `SentboxMove` option #3111
+
+### Fixes
+- Fix a bug where sometimes the file extension of a long filename containing a dot was cropped #3098
+
 ## 1.76.0
 
 ### Changes
@@ -10,6 +31,7 @@
 
 ### Fixes
 - avoid archived, fresh chats #3053
+- Also resync UIDs in folders that are not configured #2289
 - treat "NO" IMAP response to MOVE and COPY commands as an error #3058
 - Fix a bug where messages in the Spam folder created contact requests #3015
 - Fix a bug where drafts disappeared after some days #3067

@@ -24,7 +24,6 @@ use crate::login_param::LoginParam;
 use crate::message::{self, MessageState, MsgId};
 use crate::quota::QuotaInfo;
 use crate::scheduler::Scheduler;
-use crate::securejoin::Bob;
 use crate::sql::Sql;
 
 #[derive(Clone, Debug)]
@@ -45,7 +44,6 @@ pub struct InnerContext {
     /// Blob directory path
     pub(crate) blobdir: PathBuf,
     pub(crate) sql: Sql,
-    pub(crate) bob: Bob,
     pub(crate) last_smeared_timestamp: RwLock<i64>,
     pub(crate) running_state: RwLock<RunningState>,
     /// Mutex to avoid generating the key for the user more than once.
@@ -171,7 +169,6 @@ impl Context {
             blobdir,
             running_state: RwLock::new(Default::default()),
             sql: Sql::new(dbfile),
-            bob: Default::default(),
             last_smeared_timestamp: RwLock::new(0),
             generating_key_mutex: Mutex::new(()),
             oauth2_mutex: Mutex::new(()),
@@ -358,7 +355,6 @@ impl Context {
 
         let sentbox_watch = self.get_config_int(Config::SentboxWatch).await?;
         let mvbox_move = self.get_config_int(Config::MvboxMove).await?;
-        let sentbox_move = self.get_config_int(Config::SentboxMove).await?;
         let only_fetch_mvbox = self.get_config_int(Config::OnlyFetchMvbox).await?;
         let folders_configured = self
             .sql
@@ -423,7 +419,6 @@ impl Context {
         );
         res.insert("sentbox_watch", sentbox_watch.to_string());
         res.insert("mvbox_move", mvbox_move.to_string());
-        res.insert("sentbox_move", sentbox_move.to_string());
         res.insert("only_fetch_mvbox", only_fetch_mvbox.to_string());
         res.insert("folders_configured", folders_configured.to_string());
         res.insert("configured_sentbox_folder", configured_sentbox_folder);
@@ -677,10 +672,10 @@ mod tests {
     use crate::chat::{
         get_chat_contacts, get_chat_msgs, send_msg, set_muted, Chat, ChatId, MuteDuration,
     };
-    use crate::constants::{Viewtype, DC_CONTACT_ID_SELF};
+    use crate::constants::DC_CONTACT_ID_SELF;
     use crate::dc_receive_imf::dc_receive_imf;
     use crate::dc_tools::dc_create_outgoing_rfc724_mid;
-    use crate::message::Message;
+    use crate::message::{Message, Viewtype};
     use crate::test_utils::TestContext;
     use anyhow::Context as _;
     use std::time::Duration;

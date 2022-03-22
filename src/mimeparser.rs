@@ -12,8 +12,8 @@ use once_cell::sync::Lazy;
 
 use crate::aheader::Aheader;
 use crate::blob::BlobObject;
-use crate::constants::{Viewtype, DC_DESIRED_TEXT_LEN, DC_ELLIPSIS};
-use crate::contact::addr_normalize;
+use crate::constants::{DC_DESIRED_TEXT_LEN, DC_ELLIPSIS};
+use crate::contact::{addr_normalize, ContactId};
 use crate::context::Context;
 use crate::dc_tools::{dc_get_filemeta, dc_truncate, parse_receive_headers};
 use crate::dehtml::dehtml;
@@ -23,7 +23,7 @@ use crate::format_flowed::unformat_flowed;
 use crate::headerdef::{HeaderDef, HeaderDefMap};
 use crate::key::Fingerprint;
 use crate::location;
-use crate::message;
+use crate::message::{self, Viewtype};
 use crate::param::{Param, Params};
 use crate::peerstate::Peerstate;
 use crate::simplify::simplify;
@@ -1136,7 +1136,7 @@ impl MimeMessage {
         }
     }
 
-    pub fn get_rfc724_mid(&self) -> Option<String> {
+    pub(crate) fn get_rfc724_mid(&self) -> Option<String> {
         self.get_header(HeaderDef::XMicrosoftOriginalMessageId)
             .or_else(|| self.get_header(HeaderDef::MessageId))
             .and_then(|msgid| parse_message_id(msgid).ok())
@@ -1367,7 +1367,7 @@ impl MimeMessage {
     pub async fn handle_reports(
         &self,
         context: &Context,
-        from_id: u32,
+        from_id: ContactId,
         sent_timestamp: i64,
         parts: &[Part],
     ) {
