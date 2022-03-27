@@ -22,6 +22,8 @@
 - improve speed by caching config values #3131 #3145
 - optimize `markseen_msgs` #3141
 - automatically accept chats with outgoing messages #3143
+- return result from `add_parts()` via structure #3154
+- add index to speedup deletion of expired ephemeral messages #3155
 
 
 ### Fixes
