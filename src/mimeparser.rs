@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::io::Cursor;
 use std::pin::Pin;
 
 use anyhow::{bail, Result};
@@ -367,6 +368,16 @@ impl MimeMessage {
                 self.is_system_message = SystemMessage::ChatProtectionEnabled;
             } else if value == "protection-disabled" {
                 self.is_system_message = SystemMessage::ChatProtectionDisabled;
+            }
+        } else if self.get_header(HeaderDef::ChatGroupMemberRemoved).is_some() {
+            self.is_system_message = SystemMessage::MemberRemovedFromGroup;
+        } else if self.get_header(HeaderDef::ChatGroupMemberAdded).is_some() {
+            self.is_system_message = SystemMessage::MemberAddedToGroup;
+        } else if self.get_header(HeaderDef::ChatGroupNameChanged).is_some() {
+            self.is_system_message = SystemMessage::GroupNameChanged;
+        } else if let Some(value) = self.get_header(HeaderDef::ChatContent) {
+            if value == "group-avatar-changed" {
+                self.is_system_message = SystemMessage::GroupImageChanged;
             }
         }
     }
@@ -1018,8 +1029,9 @@ impl MimeMessage {
         if decoded_data.is_empty() {
             return;
         }
+        let reader = Cursor::new(decoded_data);
         let msg_type = if context
-            .is_webxdc_file(filename, decoded_data)
+            .is_webxdc_file(filename, reader)
             .await
             .unwrap_or(false)
         {
