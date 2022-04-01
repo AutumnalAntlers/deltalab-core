@@ -2246,30 +2246,40 @@ pub async fn get_chat_msgs(
                 };
 
             Ok((
-                row.get::<_, MsgId>("id")?,
                 row.get::<_, i64>("timestamp")?,
+                row.get::<_, MsgId>("id")?,
                 !is_info_msg,
             ))
         }
     } else {
         |row: &rusqlite::Row| {
             Ok((
-                row.get::<_, MsgId>("id")?,
                 row.get::<_, i64>("timestamp")?,
+                row.get::<_, MsgId>("id")?,
                 false,
             ))
         }
     };
     let process_rows = |rows: rusqlite::MappedRows<_>| {
+        // It is faster to sort here rather than
+        // let sqlite execute an ORDER BY clause.
+        let mut sorted_rows = Vec::new();
+        for row in rows {
+            let (ts, curr_id, exclude_message): (i64, MsgId, bool) = row?;
+            if !exclude_message {
+                sorted_rows.push((ts, curr_id));
+            }
+        }
+        sorted_rows.sort_unstable();
+
         let mut ret = Vec::new();
         let mut last_day = 0;
         let cnv_to_local = dc_gm2local_offset();
-        for row in rows {
-            let (curr_id, ts, exclude_message): (MsgId, i64, bool) = row?;
-            if let Some(marker_id) = marker1before {
-                if curr_id == marker_id {
-                    ret.push(ChatItem::Marker1);
-                }
+        let marker1 = marker1before.unwrap_or_else(MsgId::new_unset);
+
+        for (ts, curr_id) in sorted_rows {
+            if curr_id == marker1 {
+                ret.push(ChatItem::Marker1);
             }
             if (flags & DC_GCM_ADDDAYMARKER) != 0 {
                 let curr_local_timestamp = ts + cnv_to_local;
@@ -2281,9 +2291,7 @@ pub async fn get_chat_msgs(
                     last_day = curr_day;
                 }
             }
-            if !exclude_message {
-                ret.push(ChatItem::Message { msg_id: curr_id });
-            }
+            ret.push(ChatItem::Message { msg_id: curr_id });
         }
         Ok(ret)
     };
@@ -2301,8 +2309,7 @@ pub async fn get_chat_msgs(
                     m.param GLOB \"*S=*\"
                     OR m.from_id == ?
                     OR m.to_id == ?
-                )
-              ORDER BY m.timestamp, m.id;",
+                );",
                 paramsv![chat_id, DC_CONTACT_ID_INFO, DC_CONTACT_ID_INFO],
                 process_row,
                 process_rows,
@@ -2315,8 +2322,7 @@ pub async fn get_chat_msgs(
                 "SELECT m.id AS id, m.timestamp AS timestamp
                FROM msgs m
               WHERE m.chat_id=?
-                AND m.hidden=0
-              ORDER BY m.timestamp, m.id;",
+                AND m.hidden=0;",
                 paramsv![chat_id],
                 process_row,
                 process_rows,

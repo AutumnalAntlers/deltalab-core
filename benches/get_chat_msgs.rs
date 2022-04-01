@@ -27,10 +27,12 @@ fn criterion_benchmark(c: &mut Criterion) {
             (0..len).map(|i| chatlist.get_chat_id(i).unwrap()).collect()
         });
 
-        c.bench_function("Load all chats", |b| {
+        c.bench_function("chat::get_chat_msgs (load messages from 10 chats)", |b| {
             b.to_async(AsyncStdExecutor)
                 .iter(|| get_chat_msgs_benchmark(black_box(&path.as_ref()), black_box(&chats)))
         });
+    } else {
+        println!("env var not set: DELTACHAT_BENCHMARK_DATABASE");
     }
 }
 
