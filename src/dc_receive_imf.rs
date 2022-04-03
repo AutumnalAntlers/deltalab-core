@@ -1,7 +1,7 @@
 //! Internet Message Format reception pipeline.
 
 use std::cmp::min;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 
 use anyhow::{bail, ensure, Context as _, Result};
@@ -13,9 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::chat::{self, Chat, ChatId, ChatIdBlocked, ProtectionStatus};
 use crate::config::Config;
-use crate::constants::{
-    Blocked, Chattype, ShowEmails, DC_CHAT_ID_TRASH, DC_CONTACT_ID_LAST_SPECIAL, DC_CONTACT_ID_SELF,
-};
+use crate::constants::{Blocked, Chattype, ShowEmails, DC_CHAT_ID_TRASH};
 use crate::contact;
 use crate::contact::{
     addr_cmp, may_be_valid_addr, normalize_name, Contact, ContactId, Origin, VerifiedStatus,
@@ -180,7 +178,7 @@ pub(crate) async fn dc_receive_imf_inner(
     let (from_id, _from_id_blocked, incoming_origin) =
         from_field_to_contact_id(context, &mime_parser.from, prevent_rename).await?;
 
-    let incoming = from_id != DC_CONTACT_ID_SELF;
+    let incoming = from_id != ContactId::SELF;
 
     let to_ids = dc_add_or_lookup_contacts_by_address_list(
         context,
@@ -222,7 +220,7 @@ pub(crate) async fn dc_receive_imf_inner(
     .await
     .context("add_parts error")?;
 
-    if from_id > DC_CONTACT_ID_LAST_SPECIAL {
+    if !from_id.is_special() {
         contact::update_last_seen(context, from_id, sent_timestamp).await?;
     }
 
@@ -256,7 +254,7 @@ pub(crate) async fn dc_receive_imf_inner(
     save_locations(context, &mime_parser, chat_id, from_id, insert_msg_id).await?;
 
     if let Some(ref sync_items) = mime_parser.sync_items {
-        if from_id == DC_CONTACT_ID_SELF {
+        if from_id == ContactId::SELF {
             if mime_parser.was_encrypted() {
                 if let Err(err) = context.execute_sync_items(sync_items).await {
                     warn!(context, "receive_imf cannot execute sync items: {}", err);
@@ -279,7 +277,7 @@ pub(crate) async fn dc_receive_imf_inner(
     }
 
     if let Some(avatar_action) = &mime_parser.user_avatar {
-        if from_id != ContactId::new(0)
+        if from_id != ContactId::UNDEFINED
             && context
                 .update_contacts_timestamp(from_id, Param::AvatarTimestamp, sent_timestamp)
                 .await?
@@ -307,7 +305,7 @@ pub(crate) async fn dc_receive_imf_inner(
     // Ignore MDNs though, as they never contain the signature even if user has set it.
     if mime_parser.mdn_reports.is_empty()
         && is_partial_download.is_none()
-        && from_id != ContactId::new(0)
+        && from_id != ContactId::UNDEFINED
         && context
             .update_contacts_timestamp(from_id, Param::StatusTimestamp, sent_timestamp)
             .await?
@@ -395,8 +393,8 @@ pub async fn from_field_to_contact_id(
     )
     .await?;
 
-    if from_ids.contains(&DC_CONTACT_ID_SELF) {
-        Ok((DC_CONTACT_ID_SELF, false, Origin::OutgoingBcc))
+    if from_ids.contains(&ContactId::SELF) {
+        Ok((ContactId::SELF, false, Origin::OutgoingBcc))
     } else if !from_ids.is_empty() {
         if from_ids.len() > 1 {
             warn!(
@@ -419,7 +417,7 @@ pub async fn from_field_to_contact_id(
             "mail has an empty From header: {:?}", from_address_list
         );
 
-        Ok((ContactId::new(0), false, Origin::Unknown))
+        Ok((ContactId::UNDEFINED, false, Origin::Unknown))
     }
 }
 
@@ -494,7 +492,7 @@ async fn add_parts(
     let state: MessageState;
     let mut needs_delete_job = false;
     if incoming {
-        to_id = DC_CONTACT_ID_SELF;
+        to_id = ContactId::SELF;
 
         // Whether the message is a part of securejoin handshake that should be marked as seen
         // automatically.
@@ -526,7 +524,7 @@ async fn add_parts(
             securejoin_seen = false;
         }
 
-        let test_normal_chat = if from_id == ContactId::new(0) {
+        let test_normal_chat = if from_id == ContactId::UNDEFINED {
             Default::default()
         } else {
             ChatIdBlocked::lookup_by_contact(context, from_id).await?
@@ -541,7 +539,7 @@ async fn add_parts(
             // try to assign to a chat based on In-Reply-To/References:
 
             if let Some((new_chat_id, new_chat_id_blocked)) =
-                lookup_chat_by_reply(context, mime_parser, &parent, to_ids).await?
+                lookup_chat_by_reply(context, mime_parser, &parent, to_ids, from_id).await?
             {
                 chat_id = Some(new_chat_id);
                 chat_id_blocked = new_chat_id_blocked;
@@ -668,7 +666,7 @@ async fn add_parts(
 
         if chat_id.is_none() {
             // try to create a normal chat
-            let create_blocked = if from_id == DC_CONTACT_ID_SELF {
+            let create_blocked = if from_id == ContactId::SELF {
                 Blocked::Not
             } else {
                 Blocked::Request
@@ -720,9 +718,8 @@ async fn add_parts(
         state = MessageState::OutDelivered;
         to_id = to_ids.get(0).cloned().unwrap_or_default();
 
-        let self_sent = from_id == DC_CONTACT_ID_SELF
-            && to_ids.len() == 1
-            && to_ids.contains(&DC_CONTACT_ID_SELF);
+        let self_sent =
+            from_id == ContactId::SELF && to_ids.len() == 1 && to_ids.contains(&ContactId::SELF);
 
         // handshake may mark contacts as verified and must be processed before chats are created
         if mime_parser.get_header(HeaderDef::SecureJoin).is_some() {
@@ -774,7 +771,7 @@ async fn add_parts(
             // try to assign to a chat based on In-Reply-To/References:
 
             if let Some((new_chat_id, new_chat_id_blocked)) =
-                lookup_chat_by_reply(context, mime_parser, &parent, to_ids).await?
+                lookup_chat_by_reply(context, mime_parser, &parent, to_ids, from_id).await?
             {
                 chat_id = Some(new_chat_id);
                 chat_id_blocked = new_chat_id_blocked;
@@ -836,12 +833,11 @@ async fn add_parts(
         }
 
         if chat_id.is_none() && self_sent {
-            // from_id==to_id==DC_CONTACT_ID_SELF - this is a self-sent messages,
+            // from_id==to_id==ContactId::SELF - this is a self-sent messages,
             // maybe an Autocrypt Setup Message
-            if let Ok(chat) =
-                ChatIdBlocked::get_for_contact(context, DC_CONTACT_ID_SELF, Blocked::Not)
-                    .await
-                    .log_err(context, "Failed to get (new) chat for contact")
+            if let Ok(chat) = ChatIdBlocked::get_for_contact(context, ContactId::SELF, Blocked::Not)
+                .await
+                .log_err(context, "Failed to get (new) chat for contact")
             {
                 chat_id = Some(chat.id);
                 chat_id_blocked = chat.blocked;
@@ -1148,8 +1144,8 @@ INSERT INTO msgs
         stmt.execute(paramsv![
             rfc724_mid,
             chat_id,
-            if trash { ContactId::new(0) } else { from_id },
-            if trash { ContactId::new(0) } else { to_id },
+            if trash { ContactId::UNDEFINED } else { from_id },
+            if trash { ContactId::UNDEFINED } else { to_id },
             sort_timestamp,
             sent_timestamp,
             rcvd_timestamp,
@@ -1322,6 +1318,7 @@ async fn lookup_chat_by_reply(
     mime_parser: &MimeMessage,
     parent: &Option<Message>,
     to_ids: &[ContactId],
+    from_id: ContactId,
 ) -> Result<Option<(ChatId, Blocked)>> {
     // Try to assign message to the same chat as the parent message.
 
@@ -1343,7 +1340,7 @@ async fn lookup_chat_by_reply(
             return Ok(None);
         }
 
-        if is_probably_private_reply(context, to_ids, mime_parser, parent_chat.id).await? {
+        if is_probably_private_reply(context, to_ids, from_id, mime_parser, parent_chat.id).await? {
             return Ok(None);
         }
 
@@ -1362,6 +1359,7 @@ async fn lookup_chat_by_reply(
 async fn is_probably_private_reply(
     context: &Context,
     to_ids: &[ContactId],
+    from_id: ContactId,
     mime_parser: &MimeMessage,
     parent_chat_id: ChatId,
 ) -> Result<bool> {
@@ -1372,14 +1370,15 @@ async fn is_probably_private_reply(
     // should be assigned to the group chat. We restrict this exception to classical emails, as chat-group-messages
     // contain a Chat-Group-Id header and can be sorted into the correct chat this way.
 
-    let private_message = to_ids == [DC_CONTACT_ID_SELF];
+    let private_message =
+        (to_ids == [ContactId::SELF]) || (from_id == ContactId::SELF && to_ids.len() == 1);
     if !private_message {
         return Ok(false);
     }
 
     if !mime_parser.has_chat_version() {
         let chat_contacts = chat::get_chat_contacts(context, parent_chat_id).await?;
-        if chat_contacts.len() == 2 && chat_contacts.contains(&DC_CONTACT_ID_SELF) {
+        if chat_contacts.len() == 2 && chat_contacts.contains(&ContactId::SELF) {
             return Ok(false);
         }
     }
@@ -1407,8 +1406,8 @@ async fn create_or_lookup_group(
         if !member_ids.contains(&(from_id)) {
             member_ids.push(from_id);
         }
-        if !member_ids.contains(&(DC_CONTACT_ID_SELF)) {
-            member_ids.push(DC_CONTACT_ID_SELF);
+        if !member_ids.contains(&(ContactId::SELF)) {
+            member_ids.push(ContactId::SELF);
         }
 
         let res = create_adhoc_group(context, mime_parser, create_blocked, &member_ids)
@@ -1435,7 +1434,7 @@ async fn create_or_lookup_group(
     // they belong to the group because of the Chat-Group-Id or Message-Id header
     if let Some(chat_id) = chat_id {
         if !mime_parser.has_chat_version()
-            && is_probably_private_reply(context, to_ids, mime_parser, chat_id).await?
+            && is_probably_private_reply(context, to_ids, from_id, mime_parser, chat_id).await?
         {
             return Ok(None);
         }
@@ -1489,9 +1488,8 @@ async fn create_or_lookup_group(
         chat_id_blocked = create_blocked;
 
         // Create initial member list.
-        chat::add_to_chat_contacts_table(context, new_chat_id, DC_CONTACT_ID_SELF).await?;
-        if from_id > DC_CONTACT_ID_LAST_SPECIAL
-            && !chat::is_contact_in_chat(context, new_chat_id, from_id).await?
+        chat::add_to_chat_contacts_table(context, new_chat_id, ContactId::SELF).await?;
+        if !from_id.is_special() && !chat::is_contact_in_chat(context, new_chat_id, from_id).await?
         {
             chat::add_to_chat_contacts_table(context, new_chat_id, from_id).await?;
         }
@@ -1644,7 +1642,7 @@ async fn apply_group_changes(
 
     // add members to group/check members
     if recreate_member_list {
-        if chat::is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await?
+        if chat::is_contact_in_chat(context, chat_id, ContactId::SELF).await?
             && !chat::is_contact_in_chat(context, chat_id, from_id).await?
         {
             warn!(
@@ -1658,7 +1656,7 @@ async fn apply_group_changes(
             .await?
         {
             if removed_id.is_some()
-                || !chat::is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await?
+                || !chat::is_contact_in_chat(context, chat_id, ContactId::SELF).await?
             {
                 // Members could have been removed while we were
                 // absent. We can't use existing member list and need to
@@ -1671,11 +1669,11 @@ async fn apply_group_changes(
                     )
                     .await?;
 
-                if removed_id != Some(DC_CONTACT_ID_SELF) {
-                    chat::add_to_chat_contacts_table(context, chat_id, DC_CONTACT_ID_SELF).await?;
+                if removed_id != Some(ContactId::SELF) {
+                    chat::add_to_chat_contacts_table(context, chat_id, ContactId::SELF).await?;
                 }
             }
-            if from_id > DC_CONTACT_ID_LAST_SPECIAL
+            if !from_id.is_special()
                 && !Contact::addr_equals_contact(context, &self_addr, from_id).await?
                 && !chat::is_contact_in_chat(context, chat_id, from_id).await?
                 && removed_id != Some(from_id)
@@ -1696,7 +1694,7 @@ async fn apply_group_changes(
     }
 
     if let Some(avatar_action) = &mime_parser.group_avatar {
-        if !chat::is_contact_in_chat(context, chat_id, DC_CONTACT_ID_SELF).await? {
+        if !chat::is_contact_in_chat(context, chat_id, ContactId::SELF).await? {
             warn!(
                 context,
                 "Received group avatar update for group chat {} we are not a member of.", chat_id
@@ -1846,7 +1844,7 @@ async fn create_or_lookup_mailinglist(
             )
         })?;
 
-        chat::add_to_chat_contacts_table(context, chat_id, DC_CONTACT_ID_SELF).await?;
+        chat::add_to_chat_contacts_table(context, chat_id, ContactId::SELF).await?;
         Ok(Some((chat_id, Blocked::Request)))
     } else {
         info!(context, "creating list forbidden by caller");
@@ -2012,7 +2010,7 @@ async fn create_adhoc_grp_id(context: &Context, member_ids: &[ContactId]) -> Res
     );
     let mut params = Vec::new();
     params.extend_from_slice(member_ids);
-    params.push(DC_CONTACT_ID_SELF);
+    params.push(ContactId::SELF);
 
     let members = context
         .sql
@@ -2068,7 +2066,7 @@ async fn check_verified_properties(
     // and the message is signed with a verified key of the sender.
     // this check is skipped for SELF as there is no proper SELF-peerstate
     // and results in group-splits otherwise.
-    if from_id != DC_CONTACT_ID_SELF {
+    if from_id != ContactId::SELF {
         let peerstate = Peerstate::from_addr(context, contact.get_addr()).await?;
 
         if peerstate.is_none()
@@ -2093,7 +2091,7 @@ async fn check_verified_properties(
     let to_ids = to_ids
         .iter()
         .copied()
-        .filter(|id| *id != DC_CONTACT_ID_SELF)
+        .filter(|id| *id != ContactId::SELF)
         .collect::<Vec<ContactId>>();
 
     if to_ids.is_empty() {
@@ -2262,7 +2260,7 @@ async fn dc_add_or_lookup_contacts_by_address_list(
     origin: Origin,
     prevent_rename: bool,
 ) -> Result<Vec<ContactId>> {
-    let mut contact_ids = BTreeSet::new();
+    let mut contact_ids = HashSet::new();
     for info in address_list.iter() {
         let addr = &info.addr;
         if !may_be_valid_addr(addr) {
@@ -2288,7 +2286,7 @@ async fn add_or_lookup_contact_by_addr(
     origin: Origin,
 ) -> Result<ContactId> {
     if context.is_self_addr(addr).await? {
-        return Ok(DC_CONTACT_ID_SELF);
+        return Ok(ContactId::SELF);
     }
     let display_name_normalized = display_name.map(normalize_name).unwrap_or_default();
 
@@ -2308,7 +2306,7 @@ mod tests {
     use crate::chat::get_chat_contacts;
     use crate::chat::{get_chat_msgs, ChatItem, ChatVisibility};
     use crate::chatlist::Chatlist;
-    use crate::constants::{DC_CONTACT_ID_INFO, DC_GCL_NO_SPECIALS};
+    use crate::constants::DC_GCL_NO_SPECIALS;
     use crate::message::Message;
     use crate::test_utils::{get_chat_msg, TestContext, TestContextManager};
 
@@ -2956,7 +2954,7 @@ mod tests {
             last_msg.text,
             Some(stock_str::failed_sending_to(&t, "assidhfaaspocwaeofi@gmail.com").await,)
         );
-        assert_eq!(last_msg.from_id, DC_CONTACT_ID_INFO);
+        assert_eq!(last_msg.from_id, ContactId::INFO);
         Ok(())
     }
 
@@ -4898,7 +4896,7 @@ Hi, I created a group"#,
         )
         .await?;
         let msg_out = t.get_last_msg().await;
-        assert_eq!(msg_out.from_id, DC_CONTACT_ID_SELF);
+        assert_eq!(msg_out.from_id, ContactId::SELF);
         assert_eq!(msg_out.text.unwrap(), "Hi, I created a group");
         assert_eq!(msg_out.in_reply_to, None);
 
@@ -4923,7 +4921,7 @@ Reply from different address
         )
         .await?;
         let msg_in = t.get_last_msg().await;
-        assert_eq!(msg_in.to_id, DC_CONTACT_ID_SELF);
+        assert_eq!(msg_in.to_id, ContactId::SELF);
         assert_eq!(msg_in.text.unwrap(), "Reply from different address");
         assert_eq!(
             msg_in.in_reply_to.unwrap(),
@@ -5038,6 +5036,83 @@ Reply from different address
         // Second device automatically accepts the contact request.
         let alice2_chat = chat::Chat::load_from_db(&alice2, alice2_msg.chat_id).await?;
         assert!(!alice2_chat.is_contact_request());
+
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_outgoing_private_reply_multidevice() -> Result<()> {
+        let mut tcm = TestContextManager::new().await;
+        let alice1 = tcm.alice().await;
+        let alice2 = tcm.alice().await;
+        let bob = tcm.bob().await;
+
+        // =============== Bob creates a group ===============
+        let group_id =
+            chat::create_group_chat(&bob, ProtectionStatus::Unprotected, "Group").await?;
+        chat::add_to_chat_contacts_table(
+            &bob,
+            group_id,
+            bob.add_or_lookup_contact(&alice1).await.id,
+        )
+        .await?;
+        chat::add_to_chat_contacts_table(
+            &bob,
+            group_id,
+            Contact::create(&bob, "", "charlie@example.org").await?,
+        )
+        .await?;
+
+        // =============== Bob sends the first message to the group ===============
+        let sent = bob.send_text(group_id, "Hello all!").await;
+        alice1.recv_msg(&sent).await;
+        alice2.recv_msg(&sent).await;
+
+        // =============== Alice answers privately with device 1 ===============
+        let received = alice1.get_last_msg().await;
+        let alice1_bob_contact = alice1.add_or_lookup_contact(&bob).await;
+        assert_eq!(received.from_id, alice1_bob_contact.id);
+        assert_eq!(received.to_id, ContactId::SELF);
+        assert!(!received.hidden);
+        assert_eq!(received.text, Some("Hello all!".to_string()));
+        assert_eq!(received.in_reply_to, None);
+        assert_eq!(received.chat_blocked, Blocked::Request);
+
+        let received_group = Chat::load_from_db(&alice1, received.chat_id).await?;
+        assert_eq!(received_group.typ, Chattype::Group);
+        assert_eq!(received_group.name, "Group");
+        assert_eq!(received_group.can_send(&alice1).await?, false); // Can't send because it's Blocked::Request
+
+        let mut msg_out = Message::new(Viewtype::Text);
+        msg_out.set_text(Some("Private reply".to_string()));
+
+        assert_eq!(received_group.blocked, Blocked::Request);
+        msg_out.set_quote(&alice1, Some(&received)).await?;
+        let alice1_bob_chat = alice1.create_chat(&bob).await;
+        let sent2 = alice1.send_msg(alice1_bob_chat.id, &mut msg_out).await;
+        alice2.recv_msg(&sent2).await;
+
+        // =============== Alice's second device receives the message ===============
+        let received = alice2.get_last_msg().await;
+
+        // That's a regression test for https://github.com/deltachat/deltachat-core-rust/issues/2949:
+        assert_eq!(received.chat_id, alice2.get_chat(&bob).await.unwrap().id);
+
+        let alice2_bob_contact = alice2.add_or_lookup_contact(&bob).await;
+        assert_eq!(received.from_id, ContactId::SELF);
+        assert_eq!(received.to_id, alice2_bob_contact.id);
+        assert!(!received.hidden);
+        assert_eq!(received.text, Some("Private reply".to_string()));
+        assert_eq!(
+            received.parent(&alice2).await?.unwrap().text,
+            Some("Hello all!".to_string())
+        );
+        assert_eq!(received.chat_blocked, Blocked::Not);
+
+        let received_chat = Chat::load_from_db(&alice2, received.chat_id).await?;
+        assert_eq!(received_chat.typ, Chattype::Single);
+        assert_eq!(received_chat.name, "bob@example.net");
+        assert_eq!(received_chat.can_send(&alice2).await?, true);
 
         Ok(())
     }
