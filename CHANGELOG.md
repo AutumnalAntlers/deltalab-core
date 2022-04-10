@@ -7,11 +7,14 @@
   and remove update-id from `DC_EVENT_WEBXDC_STATUS_UPDATE` #3081
 
 ### Fixes
+- Fix an issue where the app crashes when trying to export a backup #3195
 - Hopefully fix a bug where outgoing messages appear twice with Amazon SES #3077
 - do not delete messages without Message-IDs as duplicates #3095
 - Assign replies from a different email address to the correct chat #3119
 - Assing outgoing private replies to the correct chat #3177
 - start ephemeral timer when seen status is synchronized via IMAP #3122
+- Don't create empty contact requests with "setup changed" messages; instead, send a
+  "setup changed" message into all chats we share with the peer #3187
 - do not delete duplicate messages on IMAP immediately to accidentally deleting
   the last copy #3138
 - speed up loading of chat messages #3171
