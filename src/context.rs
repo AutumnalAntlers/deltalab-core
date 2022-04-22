@@ -195,6 +195,11 @@ impl Context {
             return;
         }
 
+        if let Ok(false) = self.is_configured().await {
+            warn!(self, "can not start io on a context that is not configured");
+            return;
+        }
+
         {
             let l = &mut *self.inner.scheduler.write().await;
             if let Err(err) = l.start(self.clone()).await {
@@ -311,8 +316,8 @@ impl Context {
 
     pub async fn get_info(&self) -> Result<BTreeMap<&'static str, String>> {
         let unset = "0";
-        let l = LoginParam::from_database(self, "").await?;
-        let l2 = LoginParam::from_database(self, "configured_").await?;
+        let l = LoginParam::load_candidate_params(self).await?;
+        let l2 = LoginParam::load_configured_params(self).await?;
         let displayname = self.get_config(Config::Displayname).await?;
         let chats = get_chat_cnt(self).await? as usize;
         let unblocked_msgs = message::get_unblocked_msg_cnt(self).await as usize;
@@ -711,9 +716,7 @@ mod tests {
             dc_create_outgoing_rfc724_mid(None, contact.get_addr())
         );
         println!("{}", msg);
-        dc_receive_imf(t, msg.as_bytes(), "INBOX", false)
-            .await
-            .unwrap();
+        dc_receive_imf(t, msg.as_bytes(), false).await.unwrap();
     }
 
     #[async_std::test]

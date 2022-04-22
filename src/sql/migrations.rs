@@ -395,7 +395,7 @@ UPDATE chats SET protected=1, type=120 WHERE type=130;"#,
 
     if dbversion < 71 {
         info!(context, "[migration] v71");
-        if let Some(addr) = context.get_config(Config::ConfiguredAddr).await? {
+        if let Ok(addr) = context.get_configured_addr().await {
             if let Ok(domain) = addr.parse::<EmailAddress>().map(|email| email.domain) {
                 context
                     .set_config(
@@ -612,6 +612,17 @@ CREATE INDEX smtp_messageid ON imap(rfc724_mid);
         info!(context, "[migration] v88");
         sql.execute_migration("DROP TABLE IF EXISTS backup_blobs;", 88)
             .await?;
+    }
+    if dbversion < 89 {
+        info!(context, "[migration] v89");
+        sql.execute_migration(
+            r#"CREATE TABLE imap_markseen (
+              id INTEGER,
+              FOREIGN KEY(id) REFERENCES imap(id) ON DELETE CASCADE
+            );"#,
+            89,
+        )
+        .await?;
     }
 
     Ok((

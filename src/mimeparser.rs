@@ -2912,7 +2912,6 @@ On 2020-10-25, Bob wrote:
         dc_receive_imf(
             &t.ctx,
             include_bytes!("../test-data/message/subj_with_multimedia_msg.eml"),
-            "INBOX",
             false,
         )
         .await
@@ -3061,7 +3060,7 @@ Subject: ...
 
 Some quote.
 "###;
-        dc_receive_imf(&t, raw, "INBOX", false).await?;
+        dc_receive_imf(&t, raw, false).await?;
 
         // Delta Chat generates In-Reply-To with a starting tab when Message-ID is too long.
         let raw = br###"In-Reply-To:
@@ -3078,7 +3077,7 @@ Subject: ...
 Some reply
 "###;
 
-        dc_receive_imf(&t, raw, "INBOX", false).await?;
+        dc_receive_imf(&t, raw, false).await?;
 
         let msg = t.get_last_msg().await;
         assert_eq!(msg.get_text().unwrap(), "Some reply");
@@ -3106,13 +3105,13 @@ Message.
 "###;
 
         // Bob receives message.
-        dc_receive_imf(&bob, raw, "INBOX", false).await?;
+        dc_receive_imf(&bob, raw, false).await?;
         let msg = bob.get_last_msg().await;
         // Message is incoming.
         assert!(msg.param.get_bool(Param::WantsMdn).unwrap());
 
         // Alice receives copy-to-self.
-        dc_receive_imf(&alice, raw, "INBOX", false).await?;
+        dc_receive_imf(&alice, raw, false).await?;
         let msg = alice.get_last_msg().await;
         // Message is outgoing, don't send read receipt to self.
         assert!(msg.param.get_bool(Param::WantsMdn).is_none());
@@ -3138,7 +3137,6 @@ Message.
                  \n\
                  hello\n"
                 .as_bytes(),
-            "INBOX",
             false,
         )
         .await?;
@@ -3176,7 +3174,6 @@ Message.
                  \n\
                  --SNIPP--"
             .as_bytes(),
-            "INBOX",
             false,
         )
         .await?;
@@ -3199,7 +3196,7 @@ Message.
 
         let original =
             include_bytes!("../test-data/message/ms_exchange_report_original_message.eml");
-        dc_receive_imf(&t, original, "INBOX", false).await?;
+        dc_receive_imf(&t, original, false).await?;
         let original_msg_id = t.get_last_msg().await.id;
 
         // 1. Test mimeparser directly
@@ -3214,7 +3211,7 @@ Message.
         assert!(mimeparser.mdn_reports[0].additional_message_ids.is_empty());
 
         // 2. Test that marking the original msg as read works
-        dc_receive_imf(&t, mdn, "INBOX", false).await?;
+        dc_receive_imf(&t, mdn, false).await?;
 
         assert_eq!(
             original_msg_id.get_state(&t).await?,

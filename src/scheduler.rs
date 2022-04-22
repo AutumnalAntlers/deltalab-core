@@ -8,11 +8,13 @@ use async_std::{
 use crate::config::Config;
 use crate::context::Context;
 use crate::dc_tools::maybe_add_time_based_warnings;
+use crate::dc_tools::time;
 use crate::ephemeral::{self, delete_expired_imap_messages};
 use crate::imap::Imap;
 use crate::job::{self, Thread};
 use crate::log::LogExt;
 use crate::smtp::{send_smtp_messages, Smtp};
+use crate::sql;
 
 use self::connectivity::ConnectivityStore;
 
@@ -114,6 +116,19 @@ async fn inbox_loop(ctx: Context, started: Sender<()>, inbox_handlers: ImapConne
 
                     maybe_add_time_based_warnings(&ctx).await;
 
+                    match ctx.get_config_i64(Config::LastHousekeeping).await {
+                        Ok(last_housekeeping_time) => {
+                            let next_housekeeping_time =
+                                last_housekeeping_time.saturating_add(60 * 60 * 24);
+                            if next_housekeeping_time <= time() {
+                                sql::housekeeping(&ctx).await.ok_or_log(&ctx);
+                            }
+                        }
+                        Err(err) => {
+                            warn!(ctx, "Failed to get last housekeeping time: {}", err);
+                        }
+                    };
+
                     info = fetch_idle(&ctx, &mut connection, Config::ConfiguredInboxFolder).await;
                 }
             }
@@ -168,12 +183,14 @@ async fn fetch_idle(ctx: &Context, connection: &mut Imap, folder: Config) -> Int
                 return connection.fake_idle(ctx, Some(watch_folder)).await;
             }
 
-            // Mark expired messages for deletion.
-            if let Err(err) = delete_expired_imap_messages(ctx)
-                .await
-                .context("delete_expired_imap_messages failed")
-            {
-                warn!(ctx, "{:#}", err);
+            if folder == Config::ConfiguredInboxFolder {
+                if let Err(err) = connection
+                    .store_seen_flags_on_imap(ctx)
+                    .await
+                    .context("store_seen_flags_on_imap failed")
+                {
+                    warn!(ctx, "{:#}", err);
+                }
             }
 
             // Fetch the watched folder.
@@ -181,6 +198,17 @@ async fn fetch_idle(ctx: &Context, connection: &mut Imap, folder: Config) -> Int
                 connection.trigger_reconnect(ctx).await;
                 warn!(ctx, "{:#}", err);
                 return InterruptInfo::new(false);
+            }
+
+            // Mark expired messages for deletion. Marked messages will be deleted from the server
+            // on the next iteration of `fetch_move_delete`. `delete_expired_imap_messages` is not
+            // called right before `fetch_move_delete` because it is not well optimized and would
+            // otherwise slow down message fetching.
+            if let Err(err) = delete_expired_imap_messages(ctx)
+                .await
+                .context("delete_expired_imap_messages failed")
+            {
+                warn!(ctx, "{:#}", err);
             }
 
             // Scan additional folders only after finishing fetching the watched folder.

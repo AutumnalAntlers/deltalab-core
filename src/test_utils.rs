@@ -364,7 +364,7 @@ impl TestContext {
             "Received: (Postfix, from userid 1000); Mon, 4 Dec 2006 14:51:39 +0100 (CET)\n"
                 .to_owned()
                 + msg.payload();
-        dc_receive_imf(&self.ctx, received_msg.as_bytes(), "INBOX", false)
+        dc_receive_imf(&self.ctx, received_msg.as_bytes(), false)
             .await
             .unwrap();
     }
@@ -407,12 +407,7 @@ impl TestContext {
             .await
             .unwrap_or_default()
             .unwrap_or_default();
-        let addr = other
-            .ctx
-            .get_config(Config::ConfiguredAddr)
-            .await
-            .unwrap()
-            .unwrap();
+        let addr = other.ctx.get_configured_addr().await.unwrap();
         // MailinglistAddress is the lowest allowed origin, we'd prefer to not modify the
         // origin when creating this contact.
         let (contact_id, modified) =

@@ -29,7 +29,6 @@ use crate::dc_tools::{
 use crate::ephemeral::Timer as EphemeralTimer;
 use crate::events::EventType;
 use crate::html::new_html_mimepart;
-use crate::job::{self, Action};
 use crate::message::{self, Message, MessageState, MsgId, Viewtype};
 use crate::mimefactory::MimeFactory;
 use crate::mimeparser::SystemMessage;
@@ -561,9 +560,8 @@ impl ChatId {
             chat_id: ChatId::new(0),
         });
 
-        job::kill_action(context, Action::Housekeeping).await?;
-        let j = job::Job::new(Action::Housekeeping, 0, Params::new(), 10);
-        job::add(context, j).await?;
+        context.set_config(Config::LastHousekeeping, None).await?;
+        context.interrupt_inbox(InterruptInfo::new(false)).await;
 
         if chat.is_self_talk() {
             let mut msg = Message::new(Viewtype::Text);
@@ -1259,11 +1257,7 @@ impl Chat {
             }
         }
 
-        let from = context
-            .get_config(Config::ConfiguredAddr)
-            .await?
-            .context("Cannot prepare message for sending, address is not configured.")?;
-
+        let from = context.get_configured_addr().await?;
         let new_rfc724_mid = {
             let grpid = match self.typ {
                 Chattype::Group => Some(self.grpid.as_str()),
@@ -2052,10 +2046,7 @@ async fn create_send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<
 
     let mut recipients = mimefactory.recipients();
 
-    let from = context
-        .get_config(Config::ConfiguredAddr)
-        .await?
-        .unwrap_or_default();
+    let from = context.get_configured_addr().await?;
     let lowercase_from = from.to_lowercase();
 
     // Send BCC to self if it is enabled and we are not going to
@@ -2728,10 +2719,7 @@ pub(crate) async fn add_contact_to_chat_ex(
         context.sync_qr_code_tokens(Some(chat_id)).await?;
         context.send_sync_msg().await?;
     }
-    let self_addr = context
-        .get_config(Config::ConfiguredAddr)
-        .await?
-        .unwrap_or_default();
+    let self_addr = context.get_configured_addr().await.unwrap_or_default();
     if addr_cmp(contact.get_addr(), &self_addr) {
         // ourself is added using ContactId::SELF, do not add this address explicitly.
         // if SELF is not in the group, members cannot be added at all.
@@ -4241,7 +4229,6 @@ mod tests {
                     num
                 )
                 .as_bytes(),
-                "INBOX",
                 false,
             )
             .await?;
@@ -4691,9 +4678,7 @@ mod tests {
         assert_eq!(msg.match_indices("Gr.").count(), 1);
 
         // Bob receives this message, he may detect group by `References:`- or `Chat-Group:`-header
-        dc_receive_imf(&bob, msg.as_bytes(), "INBOX", false)
-            .await
-            .unwrap();
+        dc_receive_imf(&bob, msg.as_bytes(), false).await.unwrap();
         let msg = bob.get_last_msg().await;
 
         let bob_chat = Chat::load_from_db(&bob, msg.chat_id).await?;
@@ -4712,9 +4697,7 @@ mod tests {
         assert_eq!(msg.match_indices("Chat-").count(), 0);
 
         // Alice receives this message - she can still detect the group by the `References:`-header
-        dc_receive_imf(&alice, msg.as_bytes(), "INBOX", false)
-            .await
-            .unwrap();
+        dc_receive_imf(&alice, msg.as_bytes(), false).await.unwrap();
         let msg = alice.get_last_msg().await;
         assert_eq!(msg.chat_id, alice_chat_id);
         assert_eq!(msg.text, Some("ho!".to_string()));
@@ -4739,7 +4722,6 @@ mod tests {
                  Date: Fri, 23 Apr 2021 10:00:57 +0000\n\
                  \n\
                  hello\n",
-            "INBOX",
             false,
         )
         .await?;
@@ -4787,7 +4769,6 @@ mod tests {
                  Date: Sun, 22 Mar 2021 19:37:57 +0000\n\
                  \n\
                  hello\n",
-            "INBOX",
             false,
         )
         .await?;
@@ -4835,7 +4816,6 @@ mod tests {
                  Date: Sun, 22 Mar 2021 19:37:57 +0000\n\
                  \n\
                  hello\n",
-            "INBOX",
             false,
         )
         .await?;
@@ -4882,7 +4862,6 @@ mod tests {
                  Date: Sun, 22 Mar 2021 19:37:57 +0000\n\
                  \n\
                  hello\n",
-            "INBOX",
             false,
         )
         .await?;

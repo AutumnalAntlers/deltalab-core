@@ -54,12 +54,13 @@ and you won't get the update by `setUpdateListener()`.
 ### setUpdateListener()
 
 ```js
-window.webxdc.setUpdateListener((update) => {}, serial);
+let promise = window.webxdc.setUpdateListener((update) => {}, serial);
 ```
 
 With `setUpdateListener()` you define a callback that receives the updates
 sent by `sendUpdate()`. The callback is called for updates sent by you or other peers.
 The `serial` specifies the last serial that you know about (defaults to 0). 
+The returned promise resolves when the listener has processed all the update messages known at the time when  `setUpdateListener` was called. 
 
 Each `update` which is passed to the callback comes with the following properties: 
 

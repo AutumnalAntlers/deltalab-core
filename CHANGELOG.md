@@ -2,15 +2,25 @@
 
 ## Unreleased
 
+### API-Changes
+
+- replaced stock string `DC_STR_ONE_MOMENT` by `DC_STR_NOT_CONNECTED` #3222
+
 ### Fixes
 
 - Take `delete_device_after` into account when calculating ephemeral loop timeout #3211
+- Fix a bug where a blocked contact could send a contact request #3218
+- Make sure, videochat-room-names are always URL-safe #3231
+- Try removing account folder multiple times in case of failure #3229
 
 ### Changes
 
 - Further improve finding the correct server after logging in #3208
 - `get_connectivity_html()` returns HTML as non-scalable #3213
 - add update-serial to `DC_EVENT_WEBXDC_STATUS_UPDATE` #3215
+- Speed up message receiving via IMAP a bit #3225
+- mark messages as seen on IMAP in batches #3223
+- remove Received: based draft detection heuristic #3230
 
 
 ## 1.77.0
