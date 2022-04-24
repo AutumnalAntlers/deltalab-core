@@ -87,8 +87,6 @@ async fn inbox_loop(ctx: Context, started: Sender<()>, inbox_handlers: ImapConne
             .expect("inbox loop, missing started receiver");
         let ctx = ctx1;
 
-        // track number of continously executed jobs
-        let mut jobs_loaded = 0;
         let mut info = InterruptInfo::default();
         loop {
             let job = match job::load_next(&ctx, Thread::Imap, &info).await {
@@ -100,20 +98,11 @@ async fn inbox_loop(ctx: Context, started: Sender<()>, inbox_handlers: ImapConne
             };
 
             match job {
-                Some(job) if jobs_loaded <= 20 => {
-                    jobs_loaded += 1;
+                Some(job) => {
                     job::perform_job(&ctx, job::Connection::Inbox(&mut connection), job).await;
                     info = Default::default();
                 }
-                Some(job) => {
-                    // Let the fetch run, but return back to the job afterwards.
-                    jobs_loaded = 0;
-                    info!(ctx, "postponing imap-job {} to run fetch...", job);
-                    fetch(&ctx, &mut connection).await;
-                }
                 None => {
-                    jobs_loaded = 0;
-
                     maybe_add_time_based_warnings(&ctx).await;
 
                     match ctx.get_config_i64(Config::LastHousekeeping).await {
@@ -148,32 +137,6 @@ async fn inbox_loop(ctx: Context, started: Sender<()>, inbox_handlers: ImapConne
         .expect("inbox loop, missing shutdown receiver");
 }
 
-async fn fetch(ctx: &Context, connection: &mut Imap) {
-    match ctx.get_config(Config::ConfiguredInboxFolder).await {
-        Ok(Some(watch_folder)) => {
-            if let Err(err) = connection.prepare(ctx).await {
-                warn!(ctx, "Could not connect: {}", err);
-                return;
-            }
-
-            // fetch
-            if let Err(err) = connection.fetch_move_delete(ctx, &watch_folder).await {
-                connection.trigger_reconnect(ctx).await;
-                warn!(ctx, "{:#}", err);
-            }
-        }
-        Ok(None) => {
-            info!(ctx, "Can not fetch inbox folder, not set");
-        }
-        Err(err) => {
-            warn!(
-                ctx,
-                "Can not fetch inbox folder, failed to get config: {:?}", err
-            );
-        }
-    }
-}
-
 async fn fetch_idle(ctx: &Context, connection: &mut Imap, folder: Config) -> InterruptInfo {
     match ctx.get_config(folder).await {
         Ok(Some(watch_folder)) => {
@@ -194,7 +157,10 @@ async fn fetch_idle(ctx: &Context, connection: &mut Imap, folder: Config) -> Int
             }
 
             // Fetch the watched folder.
-            if let Err(err) = connection.fetch_move_delete(ctx, &watch_folder).await {
+            if let Err(err) = connection
+                .fetch_move_delete(ctx, &watch_folder, false)
+                .await
+            {
                 connection.trigger_reconnect(ctx).await;
                 warn!(ctx, "{:#}", err);
                 return InterruptInfo::new(false);
@@ -230,7 +196,10 @@ async fn fetch_idle(ctx: &Context, connection: &mut Imap, folder: Config) -> Int
                         // In most cases this will select the watched folder and return because there are
                         // no new messages. We want to select the watched folder anyway before going IDLE
                         // there, so this does not take additional protocol round-trip.
-                        if let Err(err) = connection.fetch_move_delete(ctx, &watch_folder).await {
+                        if let Err(err) = connection
+                            .fetch_move_delete(ctx, &watch_folder, false)
+                            .await
+                        {
                             connection.trigger_reconnect(ctx).await;
                             warn!(ctx, "{:#}", err);
                             return InterruptInfo::new(false);

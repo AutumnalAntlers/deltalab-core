@@ -132,7 +132,6 @@ pub enum Config {
     ConfiguredInboxFolder,
     ConfiguredMvboxFolder,
     ConfiguredSentboxFolder,
-    ConfiguredSpamFolder,
     ConfiguredTimestamp,
     ConfiguredProvider,
     Configured,

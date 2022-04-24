@@ -1435,6 +1435,7 @@ class TestOnlineAccount:
         ac1.direct_imap.create_folder("Drafts")
         ac1.direct_imap.create_folder("Sent")
         ac1.direct_imap.create_folder("Spam")
+        ac1.direct_imap.create_folder("Junk")
 
         acfactory.wait_configure_and_start_io()
         # Wait until each folder was selected once and we are IDLEing again:
@@ -1467,6 +1468,15 @@ class TestOnlineAccount:
             Content-Type: text/plain; charset=utf-8
 
             Unknown message in Spam
+        """.format(ac1.get_config("configured_addr")))
+        ac1.direct_imap.append("Junk", """
+            From: unknown.address@junk.org
+            Subject: subj
+            To: {}
+            Message-ID: <spam.message@junk.org>
+            Content-Type: text/plain; charset=utf-8
+
+            Unknown message in Junk
         """.format(ac1.get_config("configured_addr")))
 
         ac1.set_config("scan_all_folders_debounce_secs", "0")
