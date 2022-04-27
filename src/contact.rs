@@ -24,6 +24,7 @@ use crate::message::MessageState;
 use crate::mimeparser::AvatarAction;
 use crate::param::{Param, Params};
 use crate::peerstate::{Peerstate, PeerstateVerifiedStatus};
+use crate::sql::{self, params_iter};
 use crate::{chat, stock_str};
 
 /// Contact ID, including reserved IDs.
@@ -296,7 +297,10 @@ impl Contact {
             .await?;
         if contact_id == ContactId::SELF {
             contact.name = stock_str::self_msg(context).await;
-            contact.addr = context.get_configured_addr().await.unwrap_or_default();
+            contact.addr = context
+                .get_config(Config::ConfiguredAddr)
+                .await?
+                .unwrap_or_default();
             contact.status = context
                 .get_config(Config::Selfstatus)
                 .await?
@@ -398,6 +402,7 @@ impl Contact {
         if context.is_self_addr(addr_normalized).await? {
             return Ok(Some(ContactId::SELF));
         }
+
         let id = context
             .sql
             .query_get_value(
@@ -448,10 +453,7 @@ impl Contact {
 
         let addr = addr_normalize(addr).to_string();
 
-        // during configuration process some chats are added and addr
-        // might not be configured yet
-        let addr_self = context.get_configured_addr().await.unwrap_or_default();
-        if addr_cmp(&addr, &addr_self) {
+        if context.is_self_addr(&addr).await? {
             return Ok((ContactId::SELF, sth_modified));
         }
 
@@ -686,7 +688,7 @@ impl Contact {
         listflags: u32,
         query: Option<impl AsRef<str>>,
     ) -> Result<Vec<ContactId>> {
-        let self_addr = context.get_configured_addr().await.unwrap_or_default();
+        let self_addrs = context.get_all_self_addrs().await?;
         let mut add_self = false;
         let mut ret = Vec::new();
         let flag_verified_only = (listflags & DC_GCL_VERIFIED_ONLY) != 0;
@@ -697,23 +699,25 @@ impl Contact {
             context
                 .sql
                 .query_map(
-                    "SELECT c.id FROM contacts c \
+                    format!(
+                        "SELECT c.id FROM contacts c \
                  LEFT JOIN acpeerstates ps ON c.addr=ps.addr  \
-                 WHERE c.addr!=?1 \
-                 AND c.id>?2 \
-                 AND c.origin>=?3 \
+                 WHERE c.addr NOT IN ({})
+                 AND c.id>? \
+                 AND c.origin>=? \
                  AND c.blocked=0 \
-                 AND (iif(c.name='',c.authname,c.name) LIKE ?4 OR c.addr LIKE ?5) \
-                 AND (1=?6 OR LENGTH(ps.verified_key_fingerprint)!=0)  \
+                 AND (iif(c.name='',c.authname,c.name) LIKE ? OR c.addr LIKE ?) \
+                 AND (1=? OR LENGTH(ps.verified_key_fingerprint)!=0)  \
                  ORDER BY LOWER(iif(c.name='',c.authname,c.name)||c.addr),c.id;",
-                    paramsv![
-                        self_addr,
+                        sql::repeat_vars(self_addrs.len())
+                    ),
+                    rusqlite::params_from_iter(params_iter(&self_addrs).chain(params_iterv![
                         ContactId::LAST_SPECIAL,
                         Origin::IncomingReplyTo,
                         s3str_like_cmd,
                         s3str_like_cmd,
                         if flag_verified_only { 0i32 } else { 1i32 },
-                    ],
+                    ])),
                     |row| row.get::<_, ContactId>(0),
                     |ids| {
                         for id in ids {
@@ -724,13 +728,17 @@ impl Contact {
                 )
                 .await?;
 
-            let self_name = context
-                .get_config(Config::Displayname)
-                .await?
-                .unwrap_or_default();
-            let self_name2 = stock_str::self_msg(context);
-
             if let Some(query) = query {
+                let self_addr = context
+                    .get_config(Config::ConfiguredAddr)
+                    .await?
+                    .unwrap_or_default();
+                let self_name = context
+                    .get_config(Config::Displayname)
+                    .await?
+                    .unwrap_or_default();
+                let self_name2 = stock_str::self_msg(context);
+
                 if self_addr.contains(query.as_ref())
                     || self_name.contains(query.as_ref())
                     || self_name2.await.contains(query.as_ref())
@@ -746,13 +754,19 @@ impl Contact {
             context
                 .sql
                 .query_map(
-                    "SELECT id FROM contacts
-                 WHERE addr!=?1
-                 AND id>?2
-                 AND origin>=?3
+                    format!(
+                        "SELECT id FROM contacts
+                 WHERE addr NOT IN ({})
+                 AND id>?
+                 AND origin>=?
                  AND blocked=0
                  ORDER BY LOWER(iif(name='',authname,name)||addr),id;",
-                    paramsv![self_addr, ContactId::LAST_SPECIAL, Origin::IncomingReplyTo],
+                        sql::repeat_vars(self_addrs.len())
+                    ),
+                    rusqlite::params_from_iter(params_iter(&self_addrs).chain(params_iterv![
+                        ContactId::LAST_SPECIAL,
+                        Origin::IncomingReplyTo
+                    ])),
                     |row| row.get::<_, ContactId>(0),
                     |ids| {
                         for id in ids {
@@ -1116,26 +1130,6 @@ impl Contact {
         Ok(VerifiedStatus::Unverified)
     }
 
-    pub async fn addr_equals_contact(
-        context: &Context,
-        addr: &str,
-        contact_id: ContactId,
-    ) -> Result<bool> {
-        if addr.is_empty() {
-            return Ok(false);
-        }
-
-        let contact = Contact::load_from_db(context, contact_id).await?;
-        if !contact.addr.is_empty() {
-            let normalized_addr = addr_normalize(addr);
-            if contact.addr == normalized_addr {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-
     pub async fn get_real_cnt(context: &Context) -> Result<usize> {
         if !context.sql.is_open().await {
             return Ok(0);
@@ -1426,17 +1420,6 @@ fn cat_fingerprint(
     }
 }
 
-impl Context {
-    /// determine whether the specified addr maps to the/a self addr
-    pub async fn is_self_addr(&self, addr: &str) -> Result<bool> {
-        if let Some(self_addr) = self.get_config(Config::ConfiguredAddr).await? {
-            Ok(addr_cmp(&self_addr, addr))
-        } else {
-            Ok(false)
-        }
-    }
-}
-
 pub fn addr_cmp(addr1: &str, addr2: &str) -> bool {
     let norm1 = addr_normalize(addr1).to_lowercase();
     let norm2 = addr_normalize(addr2).to_lowercase();
@@ -1531,6 +1514,8 @@ mod tests {
     #[async_std::test]
     async fn test_get_contacts() -> Result<()> {
         let context = TestContext::new().await;
+
+        assert!(context.get_all_self_addrs().await?.is_empty());
 
         // Bob is not in the contacts yet.
         let contacts = Contact::get_all(&context.ctx, 0, Some("bob")).await?;

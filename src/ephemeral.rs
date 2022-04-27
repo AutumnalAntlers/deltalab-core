@@ -315,7 +315,7 @@ pub(crate) async fn start_ephemeral_timers_msgids(
                 "UPDATE msgs SET ephemeral_timestamp = ? + ephemeral_timer
          WHERE (ephemeral_timestamp == 0 OR ephemeral_timestamp > ? + ephemeral_timer) AND ephemeral_timer > 0
          AND id IN ({})",
-                sql::repeat_vars(msg_ids.len())?
+                sql::repeat_vars(msg_ids.len())
             ),
             rusqlite::params_from_iter(
                 std::iter::once(&now as &dyn crate::ToSql)
@@ -399,10 +399,7 @@ WHERE
     }
 
     if updated {
-        context.emit_event(EventType::MsgsChanged {
-            chat_id: ChatId::new(0),
-            msg_id: MsgId::new(0),
-        });
+        context.emit_msgs_changed_without_ids();
     }
 
     Ok(())

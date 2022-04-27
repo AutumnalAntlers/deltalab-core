@@ -34,6 +34,17 @@ macro_rules! paramsv {
     };
 }
 
+#[macro_export]
+macro_rules! params_iterv {
+    ($($param:expr),+ $(,)?) => {
+        vec![$(&$param as &dyn $crate::ToSql),+]
+    };
+}
+
+pub(crate) fn params_iter(iter: &[impl crate::ToSql]) -> impl Iterator<Item = &dyn crate::ToSql> {
+    iter.iter().map(|item| item as &dyn crate::ToSql)
+}
+
 mod migrations;
 
 /// A wrapper around the underlying Sqlite3 object.
@@ -832,13 +843,10 @@ async fn prune_tombstones(sql: &Sql) -> Result<()> {
 ///
 /// Use this together with [`rusqlite::ParamsFromIter`] to use dynamically generated
 /// parameter lists.
-pub fn repeat_vars(count: usize) -> Result<String> {
-    if count == 0 {
-        bail!("Must have at least one repeat variable");
-    }
+pub fn repeat_vars(count: usize) -> String {
     let mut s = "?,".repeat(count);
     s.pop(); // Remove trailing comma
-    Ok(s)
+    s
 }
 
 #[cfg(test)]

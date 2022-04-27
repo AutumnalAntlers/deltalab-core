@@ -6,6 +6,7 @@ use strum_macros::{AsRefStr, Display, EnumIter, EnumProperty, EnumString};
 
 use crate::blob::BlobObject;
 use crate::constants::DC_VERSION_STR;
+use crate::contact::addr_cmp;
 use crate::context::Context;
 use crate::dc_tools::{dc_get_abs_path, improve_single_line_input};
 use crate::events::EventType;
@@ -114,6 +115,7 @@ pub enum Config {
     DeleteDeviceAfter,
 
     SaveMimeHeaders,
+    /// The primary email address. Also see `SecondaryAddrs`.
     ConfiguredAddr,
     ConfiguredMailServer,
     ConfiguredMailUser,
@@ -135,6 +137,10 @@ pub enum Config {
     ConfiguredTimestamp,
     ConfiguredProvider,
     Configured,
+
+    /// All secondary self addresses separated by spaces
+    /// (`addr1@example.org addr2@exapmle.org addr3@example.org`)
+    SecondaryAddrs,
 
     #[strum(serialize = "sys.version")]
     SysVersion,
@@ -228,12 +234,6 @@ impl Context {
 
     pub async fn get_config_bool(&self, key: Config) -> Result<bool> {
         Ok(self.get_config_int(key).await? != 0)
-    }
-
-    pub(crate) async fn get_configured_addr(&self) -> Result<String> {
-        self.get_config(Config::ConfiguredAddr)
-            .await?
-            .context("no address configured")
     }
 
     pub(crate) async fn should_watch_mvbox(&self) -> Result<bool> {
@@ -337,6 +337,73 @@ impl Context {
     }
 }
 
+// Separate impl block for self address handling
+impl Context {
+    /// Determine whether the specified addr maps to the/a self addr.
+    /// Returns `false` if no addresses are configured.
+    pub(crate) async fn is_self_addr(&self, addr: &str) -> Result<bool> {
+        Ok(self
+            .get_config(Config::ConfiguredAddr)
+            .await?
+            .iter()
+            .any(|a| addr_cmp(addr, a))
+            || self
+                .get_secondary_self_addrs()
+                .await?
+                .iter()
+                .any(|a| addr_cmp(addr, a)))
+    }
+
+    /// Sets `primary_new` as the new primary self address and saves the old
+    /// primary address (if exists) as a secondary address.
+    ///
+    /// This should only be used by test code and during configure.
+    pub(crate) async fn set_primary_self_addr(&self, primary_new: &str) -> Result<()> {
+        // add old primary address (if exists) to secondary addresses
+        let mut secondary_addrs = self.get_all_self_addrs().await?;
+        // never store a primary address also as a secondary
+        secondary_addrs.retain(|a| !addr_cmp(a, primary_new));
+        self.set_config(
+            Config::SecondaryAddrs,
+            Some(secondary_addrs.join(" ").as_str()),
+        )
+        .await?;
+
+        self.set_config(Config::ConfiguredAddr, Some(primary_new))
+            .await?;
+
+        Ok(())
+    }
+
+    /// Returns all primary and secondary self addresses.
+    pub(crate) async fn get_all_self_addrs(&self) -> Result<Vec<String>> {
+        let primary_addrs = self.get_config(Config::ConfiguredAddr).await?.into_iter();
+        let secondary_addrs = self.get_secondary_self_addrs().await?.into_iter();
+
+        Ok(primary_addrs.chain(secondary_addrs).collect())
+    }
+
+    /// Returns all secondary self addresses.
+    pub(crate) async fn get_secondary_self_addrs(&self) -> Result<Vec<String>> {
+        let secondary_addrs = self
+            .get_config(Config::SecondaryAddrs)
+            .await?
+            .unwrap_or_default();
+        Ok(secondary_addrs
+            .split_ascii_whitespace()
+            .map(|s| s.to_string())
+            .collect())
+    }
+
+    /// Returns the primary self address.
+    /// Returns an error if no self addr is configured.
+    pub async fn get_primary_self_addr(&self) -> Result<String> {
+        self.get_config(Config::ConfiguredAddr)
+            .await?
+            .context("No self addr configured")
+    }
+}
+
 /// Returns all available configuration keys concated together.
 fn get_config_keys_string() -> String {
     let keys = Config::iter().fold(String::new(), |mut acc, key| {
@@ -419,6 +486,59 @@ mod tests {
         assert_eq!(t.get_config_bool(c).await?, true);
         t.set_config_bool(c, false).await?;
         assert_eq!(t.get_config_bool(c).await?, false);
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_self_addrs() -> Result<()> {
+        let alice = TestContext::new_alice().await;
+
+        assert!(alice.is_self_addr("alice@example.org").await?);
+        assert_eq!(alice.get_all_self_addrs().await?, vec!["alice@example.org"]);
+        assert!(!alice.is_self_addr("alice@alice.com").await?);
+
+        // Test adding the same primary address
+        alice.set_primary_self_addr("alice@example.org").await?;
+        alice.set_primary_self_addr("Alice@Example.Org").await?;
+        assert_eq!(alice.get_all_self_addrs().await?, vec!["Alice@Example.Org"]);
+
+        // Test adding a new (primary) self address
+        // The address is trimmed during by `LoginParam::from_database()`,
+        // so `set_primary_self_addr()` doesn't have to trim it.
+        alice.set_primary_self_addr(" Alice@alice.com ").await?;
+        assert!(alice.is_self_addr("    aliCe@example.org").await?);
+        assert!(alice.is_self_addr("alice@alice.com").await?);
+        assert_eq!(
+            alice.get_all_self_addrs().await?,
+            vec![" Alice@alice.com ", "Alice@Example.Org"]
+        );
+
+        // Check that the entry is not duplicated
+        alice.set_primary_self_addr("alice@alice.com").await?;
+        alice.set_primary_self_addr("alice@alice.com").await?;
+        assert_eq!(
+            alice.get_all_self_addrs().await?,
+            vec!["alice@alice.com", "Alice@Example.Org"]
+        );
+
+        // Test switching back
+        alice.set_primary_self_addr("alice@example.org").await?;
+        assert_eq!(
+            alice.get_all_self_addrs().await?,
+            vec!["alice@example.org", "alice@alice.com"]
+        );
+
+        // Test setting a new primary self address, the previous self address
+        // should be kept as a secondary self address
+        alice.set_primary_self_addr("alice@alice.xyz").await?;
+        assert_eq!(
+            alice.get_all_self_addrs().await?,
+            vec!["alice@alice.xyz", "alice@example.org", "alice@alice.com"]
+        );
+        assert!(alice.is_self_addr("alice@example.org").await?);
+        assert!(alice.is_self_addr("alice@alice.com").await?);
+        assert!(alice.is_self_addr("Alice@alice.xyz").await?);
+
         Ok(())
     }
 }

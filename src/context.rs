@@ -241,6 +241,24 @@ impl Context {
         });
     }
 
+    /// Emits a generic MsgsChanged event (without chat or message id)
+    pub fn emit_msgs_changed_without_ids(&self) {
+        self.emit_event(EventType::MsgsChanged {
+            chat_id: ChatId::new(0),
+            msg_id: MsgId::new(0),
+        });
+    }
+
+    /// Emits a MsgsChanged event with specified chat and message ids
+    pub fn emit_msgs_changed(&self, chat_id: ChatId, msg_id: MsgId) {
+        self.emit_event(EventType::MsgsChanged { chat_id, msg_id });
+    }
+
+    /// Emits an IncomingMsg event with specified chat and message ids
+    pub fn emit_incoming_msg(&self, chat_id: ChatId, msg_id: MsgId) {
+        self.emit_event(EventType::IncomingMsg { chat_id, msg_id });
+    }
+
     /// Returns a receiver for emitted events.
     ///
     /// Multiple emitters can be created, but note that in this case each emitted event will
@@ -318,6 +336,7 @@ impl Context {
         let unset = "0";
         let l = LoginParam::load_candidate_params(self).await?;
         let l2 = LoginParam::load_configured_params(self).await?;
+        let secondary_addrs = self.get_secondary_self_addrs().await?.join(", ");
         let displayname = self.get_config(Config::Displayname).await?;
         let chats = get_chat_cnt(self).await? as usize;
         let unblocked_msgs = message::get_unblocked_msg_cnt(self).await as usize;
@@ -403,6 +422,7 @@ impl Context {
         res.insert("socks5_enabled", socks5_enabled.to_string());
         res.insert("entered_account_settings", l.to_string());
         res.insert("used_account_settings", l2.to_string());
+        res.insert("secondary_addrs", secondary_addrs);
         res.insert(
             "fetch_existing_msgs",
             self.get_config_int(Config::FetchExistingMsgs)
