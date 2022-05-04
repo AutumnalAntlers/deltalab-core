@@ -6,7 +6,45 @@ from deltachat import register_global_plugin
 from deltachat.hookspec import global_hookimpl
 from deltachat.capi import ffi
 from deltachat.capi import lib
+from deltachat.testplugin import ACSetup
 # from deltachat.account import EventLogger
+
+
+class TestACSetup:
+    def test_basic_states(self, acfactory, monkeypatch):
+        pc = ACSetup(init_time=0.0)
+        acc = acfactory.get_unconfigured_account()
+        monkeypatch.setattr(acc, "configure", lambda **kwargs: None)
+        pc.start_configure(acc)
+        assert pc._account2state[acc] == pc.CONFIGURING
+        pc._configured_events.put((acc, True))
+        monkeypatch.setattr(pc, "init_direct_imap", lambda *args, **kwargs: None)
+        pc.wait_one_configured(acc)
+        assert pc._account2state[acc] == pc.CONFIGURED
+        monkeypatch.setattr(pc, "_onconfigure_start_io", lambda *args, **kwargs: None)
+        pc.bring_online()
+        assert pc._account2state[acc] == pc.IDLEREADY
+
+    def test_two_accounts_one_waited_all_started(self, monkeypatch, acfactory):
+        pc = ACSetup(init_time=0.0)
+        monkeypatch.setattr(pc, "init_direct_imap", lambda *args, **kwargs: None)
+        monkeypatch.setattr(pc, "_onconfigure_start_io", lambda *args, **kwargs: None)
+        ac1 = acfactory.get_unconfigured_account()
+        monkeypatch.setattr(ac1, "configure", lambda **kwargs: None)
+        pc.start_configure(ac1)
+        ac2 = acfactory.get_unconfigured_account()
+        monkeypatch.setattr(ac2, "configure", lambda **kwargs: None)
+        pc.start_configure(ac2)
+        assert pc._account2state[ac1] == pc.CONFIGURING
+        assert pc._account2state[ac2] == pc.CONFIGURING
+        pc._configured_events.put((ac1, True))
+        pc.wait_one_configured(ac1)
+        assert pc._account2state[ac1] == pc.CONFIGURED
+        assert pc._account2state[ac2] == pc.CONFIGURING
+        pc._configured_events.put((ac2, True))
+        pc.bring_online()
+        assert pc._account2state[ac1] == pc.IDLEREADY
+        assert pc._account2state[ac2] == pc.IDLEREADY
 
 
 def test_empty_context():
@@ -68,8 +106,7 @@ def test_sig():
 
 
 def test_markseen_invalid_message_ids(acfactory):
-    ac1 = acfactory.get_configured_offline_account()
-
+    ac1 = acfactory.get_pseudo_configured_account()
     contact1 = ac1.create_contact("some1@example.com", name="some1")
     chat = contact1.create_chat()
     chat.send_text("one messae")
@@ -80,7 +117,7 @@ def test_markseen_invalid_message_ids(acfactory):
 
 
 def test_get_special_message_id_returns_empty_message(acfactory):
-    ac1 = acfactory.get_configured_offline_account()
+    ac1 = acfactory.get_pseudo_configured_account()
     for i in range(1, 10):
         msg = ac1.get_message_by_id(i)
         assert msg.id == 0

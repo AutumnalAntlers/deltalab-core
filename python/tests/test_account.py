@@ -80,6 +80,22 @@ class TestOfflineAccountBasic:
         with pytest.raises(KeyError):
             ac1.get_config("lqkwje")
 
+    def test_set_config_int_conversion(self, acfactory):
+        ac1 = acfactory.get_unconfigured_account()
+        ac1.set_config("mvbox_move", False)
+        assert ac1.get_config("mvbox_move") == "0"
+        ac1.set_config("mvbox_move", True)
+        assert ac1.get_config("mvbox_move") == "1"
+        ac1.set_config("mvbox_move", 0)
+        assert ac1.get_config("mvbox_move") == "0"
+        ac1.set_config("mvbox_move", 1)
+        assert ac1.get_config("mvbox_move") == "1"
+
+    def test_update_config(self, acfactory):
+        ac1 = acfactory.get_unconfigured_account()
+        ac1.update_config(dict(mvbox_move=False))
+        assert ac1.get_config("mvbox_move") == "0"
+
     def test_has_savemime(self, acfactory):
         ac1 = acfactory.get_unconfigured_account()
         assert "save_mime_headers" in ac1.get_config("sys.config_keys").split()
@@ -94,7 +110,7 @@ class TestOfflineAccountBasic:
         assert not ac1.get_self_contact().addr
 
     def test_selfcontact_configured(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         me = ac1.get_self_contact()
         assert me.display_name
         assert me.addr
@@ -105,14 +121,14 @@ class TestOfflineAccountBasic:
             ac1.get_config("123123")
 
     def test_empty_group_bcc_self_enabled(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         ac1.set_config("bcc_self", "1")
         chat = ac1.create_group_chat(name="group1")
         msg = chat.send_text("msg1")
         assert msg in chat.get_messages()
 
     def test_empty_group_bcc_self_disabled(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         ac1.set_config("bcc_self", "0")
         chat = ac1.create_group_chat(name="group1")
         msg = chat.send_text("msg1")
@@ -121,7 +137,7 @@ class TestOfflineAccountBasic:
 
 class TestOfflineContact:
     def test_contact_attr(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         contact1 = ac1.create_contact("some1@example.org", name="some1")
         contact2 = ac1.create_contact("some1@example.org", name="some1")
         str(contact1)
@@ -134,7 +150,7 @@ class TestOfflineContact:
         assert not contact1.is_verified()
 
     def test_get_blocked(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         contact1 = ac1.create_contact("some1@example.org", name="some1")
         contact2 = ac1.create_contact("some2@example.org", name="some2")
         ac1.create_contact("some3@example.org", name="some3")
@@ -148,12 +164,12 @@ class TestOfflineContact:
         assert ac1.get_blocked_contacts() == [contact1]
 
     def test_create_self_contact(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         contact1 = ac1.create_contact(ac1.get_config("addr"))
         assert contact1.id == 1
 
     def test_get_contacts_and_delete(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         contact1 = ac1.create_contact("some1@example.org", name="some1")
         contacts = ac1.get_contacts()
         assert len(contacts) == 1
@@ -168,15 +184,15 @@ class TestOfflineContact:
         assert contact1 not in ac1.get_contacts()
 
     def test_get_contacts_and_delete_fails(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         contact1 = ac1.create_contact("some1@example.com", name="some1")
         msg = contact1.create_chat().send_text("one message")
         assert not ac1.delete_contact(contact1)
         assert not msg.filemime
 
     def test_create_chat_flexibility(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
-        ac2 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
+        ac2 = acfactory.get_pseudo_configured_account()
         chat1 = ac1.create_chat(ac2)
         chat2 = ac1.create_chat(ac2.get_self_contact().addr)
         assert chat1 == chat2
@@ -185,7 +201,7 @@ class TestOfflineContact:
             ac1.create_chat(ac3)
 
     def test_contact_rename(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         contact = ac1.create_contact("some1@example.com", name="some1")
         chat = ac1.create_chat(contact)
         assert chat.get_name() == "some1"
@@ -198,7 +214,7 @@ class TestOfflineContact:
 class TestOfflineChat:
     @pytest.fixture
     def ac1(self, acfactory):
-        return acfactory.get_configured_offline_account()
+        return acfactory.get_pseudo_configured_account()
 
     @pytest.fixture
     def chat1(self, ac1):
@@ -232,8 +248,8 @@ class TestOfflineChat:
             pytest.fail("could not find chat")
 
     def test_group_chat_add_second_account(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
-        ac2 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
+        ac2 = acfactory.get_pseudo_configured_account()
         chat = ac1.create_group_chat(name="title1")
         with pytest.raises(ValueError):
             chat.add_contact(ac2.get_self_contact())
@@ -286,7 +302,7 @@ class TestOfflineChat:
 
     @pytest.mark.parametrize("verified", [True, False])
     def test_group_chat_qr(self, acfactory, ac1, verified):
-        ac2 = acfactory.get_configured_offline_account()
+        ac2 = acfactory.get_pseudo_configured_account()
         chat = ac1.create_group_chat(name="title1", verified=verified)
         assert chat.is_group()
         qr = chat.get_join_qr()
@@ -432,7 +448,7 @@ class TestOfflineChat:
         assert msg2.filename != msg.filename
 
     def test_create_contact(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         email = "hello <hello@example.org>"
         contact1 = ac1.create_contact(email)
         assert contact1.addr == "hello@example.org"
@@ -443,7 +459,7 @@ class TestOfflineChat:
         assert contact2.name == "real"
 
     def test_create_chat_simple(self, acfactory):
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         contact1 = ac1.create_contact("some1@example.org", name="some1")
         contact1.create_chat().send_text("hello")
 
@@ -465,7 +481,7 @@ class TestOfflineChat:
 
     def test_import_export_one_contact(self, acfactory, tmpdir):
         backupdir = tmpdir.mkdir("backup")
-        ac1 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
         chat = ac1.create_contact("some1 <some1@example.org>").create_chat()
         # send a text message
         msg = chat.send_text("msg1")
@@ -504,8 +520,8 @@ class TestOfflineChat:
         assert chat1.get_draft() is None
 
     def test_qr_setup_contact(self, acfactory, lp):
-        ac1 = acfactory.get_configured_offline_account()
-        ac2 = acfactory.get_configured_offline_account()
+        ac1 = acfactory.get_pseudo_configured_account()
+        ac2 = acfactory.get_pseudo_configured_account()
         qr = ac1.get_setup_contact_qr()
         assert qr.startswith("OPENPGP4FPR:")
         res = ac2.check_qr(qr)
@@ -623,16 +639,16 @@ class TestOfflineChat:
 
 
 def test_basic_imap_api(acfactory, tmpdir):
-    ac1, ac2 = acfactory.get_two_online_accounts()
+    ac1, ac2 = acfactory.get_online_accounts(2)
     chat12 = acfactory.get_accepted_chat(ac1, ac2)
 
     imap2 = ac2.direct_imap
 
-    imap2.idle_start()
-    chat12.send_text("hello")
-    ac2._evtracker.wait_next_incoming_message()
+    with imap2.idle() as idle2:
+        chat12.send_text("hello")
+        ac2._evtracker.wait_next_incoming_message()
+        idle2.wait_for_new_message()
 
-    imap2.idle_check(terminate=True)
     assert imap2.get_unread_cnt() == 1
     imap2.mark_all_read()
     assert imap2.get_unread_cnt() == 0
@@ -645,52 +661,43 @@ class TestOnlineAccount:
     @pytest.mark.ignored
     def test_configure_generate_key(self, acfactory, lp):
         # A slow test which will generate new keys.
-        ac1 = acfactory.get_online_configuring_account(
-            pre_generated_key=False,
-            config={"key_gen_type": str(const.DC_KEY_GEN_RSA2048)}
-        )
-        ac2 = acfactory.get_online_configuring_account(
-            pre_generated_key=False,
-            config={"key_gen_type": str(const.DC_KEY_GEN_ED25519)}
-        )
-        acfactory.wait_configure_and_start_io()
+        acfactory.remove_preconfigured_keys()
+        ac1 = acfactory.new_online_configuring_account(key_gen_type=str(const.DC_KEY_GEN_RSA2048))
+        ac2 = acfactory.new_online_configuring_account(key_gen_type=str(const.DC_KEY_GEN_ED25519))
+        acfactory.bring_accounts_online()
         chat = acfactory.get_accepted_chat(ac1, ac2)
 
         lp.sec("ac1: send unencrypted message to ac2")
         chat.send_text("message1")
         lp.sec("ac2: waiting for message from ac1")
-        ev = ac2._evtracker.get_matching("DC_EVENT_INCOMING_MSG")
-        msg_in = ac2.get_message_by_id(ev.data2)
+        msg_in = ac2._evtracker.wait_next_incoming_message()
         assert msg_in.text == "message1"
         assert not msg_in.is_encrypted()
 
         lp.sec("ac2: send encrypted message to ac1")
         msg_in.chat.send_text("message2")
         lp.sec("ac1: waiting for message from ac2")
-        ev = ac1._evtracker.get_matching("DC_EVENT_INCOMING_MSG")
-        msg2_in = ac1.get_message_by_id(ev.data2)
+        msg2_in = ac1._evtracker.wait_next_incoming_message()
         assert msg2_in.text == "message2"
         assert msg2_in.is_encrypted()
 
         lp.sec("ac1: send encrypted message to ac2")
         msg2_in.chat.send_text("message3")
         lp.sec("ac2: waiting for message from ac1")
-        ev = ac2._evtracker.get_matching("DC_EVENT_INCOMING_MSG")
-        msg3_in = ac1.get_message_by_id(ev.data2)
+        msg3_in = ac2._evtracker.wait_next_incoming_message()
         assert msg3_in.text == "message3"
         assert msg3_in.is_encrypted()
 
     def test_configure_canceled(self, acfactory):
-        ac1 = acfactory.get_online_configuring_account()
-        ac1._configtracker.wait_progress()
+        ac1 = acfactory.new_online_configuring_account()
         ac1.stop_ongoing()
         try:
-            ac1._configtracker.wait_finish()
-        except Exception:
+            acfactory.wait_configured(ac1)
+        except pytest.fail.Exception:
             pass
 
     def test_export_import_self_keys(self, acfactory, tmpdir, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         dir = tmpdir.mkdir("exportdir")
         export_files = ac1.export_self_keys(dir.strpath)
@@ -710,17 +717,14 @@ class TestOnlineAccount:
         assert key_id2 == key_id
 
     def test_one_account_send_bcc_setting(self, acfactory, lp):
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.get_online_configuring_account()
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account()
+        ac1_clone = acfactory.new_online_configuring_account(cloned_from=ac1)
+        acfactory.bring_accounts_online()
 
-        # Clone the first account: we will test if sent messages
-        # are copied to it via BCC.
-        ac1_clone = acfactory.clone_online_account(ac1)
-
-        acfactory.wait_configure_and_start_io()
+        # test if sent messages are copied to it via BCC.
 
         chat = acfactory.get_accepted_chat(ac1, ac2)
-
         self_addr = ac1.get_config("addr")
         other_addr = ac2.get_config("addr")
 
@@ -741,24 +745,24 @@ class TestOnlineAccount:
         ac1.set_config("bcc_self", "1")
 
         lp.sec("send out message with bcc to ourselves")
-        ac1.direct_imap.idle_start()
-        msg_out = chat.send_text("message2")
+        with ac1.direct_imap.idle() as idle1:
+            msg_out = chat.send_text("message2")
 
-        # wait for send out (BCC)
-        ev = ac1._evtracker.get_matching("DC_EVENT_SMTP_MESSAGE_SENT")
-        assert ac1.get_config("bcc_self") == "1"
+            # wait for send out (BCC)
+            ev = ac1._evtracker.get_matching("DC_EVENT_SMTP_MESSAGE_SENT")
+            assert ac1.get_config("bcc_self") == "1"
 
-        # now make sure we are sending message to ourselves too
-        assert self_addr in ev.data2
-        assert other_addr in ev.data2
-        assert ac1.direct_imap.idle_wait_for_seen()
+            # now make sure we are sending message to ourselves too
+            assert self_addr in ev.data2
+            assert other_addr in ev.data2
+            assert idle1.wait_for_seen()
 
         # Second client receives only second message, but not the first
         ev_msg = ac1_clone._evtracker.wait_next_messages_changed()
         assert ev_msg.text == msg_out.text
 
     def test_send_file_twice_unicode_filename_mangling(self, tmpdir, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat = acfactory.get_accepted_chat(ac1, ac2)
 
         basename = "somedäüta.html.zip"
@@ -790,7 +794,7 @@ class TestOnlineAccount:
         assert msg.filename != msg2.filename
 
     def test_send_file_html_attachment(self, tmpdir, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat = acfactory.get_accepted_chat(ac1, ac2)
 
         basename = "test.html"
@@ -814,7 +818,7 @@ class TestOnlineAccount:
         assert msg.filename.endswith(basename)
 
     def test_html_message(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat = acfactory.get_accepted_chat(ac1, ac2)
         html_text = "<p>hello HTML world</p>"
 
@@ -857,22 +861,22 @@ class TestOnlineAccount:
 
     def test_mvbox_sentbox_threads(self, acfactory, lp):
         lp.sec("ac1: start with mvbox thread")
-        ac1 = acfactory.get_online_configuring_account(move=True, sentbox=True)
+        ac1 = acfactory.new_online_configuring_account(mvbox_move=True, sentbox_watch=True)
 
         lp.sec("ac2: start without mvbox/sentbox threads")
-        ac2 = acfactory.get_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account(mvbox_move=False, sentbox_watch=False)
 
         lp.sec("ac2 and ac1: waiting for configuration")
-        acfactory.wait_configure_and_start_io()
+        acfactory.bring_accounts_online()
 
         lp.sec("ac1: send message and wait for ac2 to receive it")
         acfactory.get_accepted_chat(ac1, ac2).send_text("message1")
         assert ac2._evtracker.wait_next_incoming_message().text == "message1"
 
     def test_move_works(self, acfactory):
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.get_online_configuring_account(move=True)
-        acfactory.wait_configure_and_start_io()
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account(mvbox_move=True)
+        acfactory.bring_accounts_online()
         chat = acfactory.get_accepted_chat(ac1, ac2)
         chat.send_text("message1")
 
@@ -884,9 +888,9 @@ class TestOnlineAccount:
         assert ev.data2 > const.DC_CHAT_ID_LAST_SPECIAL
 
     def test_move_works_on_self_sent(self, acfactory):
-        ac1 = acfactory.get_online_configuring_account(move=True)
-        ac2 = acfactory.get_online_configuring_account()
-        acfactory.wait_configure_and_start_io()
+        ac1 = acfactory.new_online_configuring_account(mvbox_move=True)
+        ac2 = acfactory.new_online_configuring_account()
+        acfactory.bring_accounts_online()
         ac1.set_config("bcc_self", "1")
 
         chat = acfactory.get_accepted_chat(ac1, ac2)
@@ -898,7 +902,7 @@ class TestOnlineAccount:
         ac1._evtracker.get_matching("DC_EVENT_IMAP_MESSAGE_MOVED")
 
     def test_forward_messages(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat = ac1.create_chat(ac2)
 
         lp.sec("ac1: send message to ac2")
@@ -930,7 +934,7 @@ class TestOnlineAccount:
         assert not chat3.get_messages()
 
     def test_forward_own_message(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat = acfactory.get_accepted_chat(ac1, ac2)
 
         lp.sec("sending message")
@@ -954,7 +958,8 @@ class TestOnlineAccount:
         assert msg_in.is_forwarded()
 
     def test_send_self_message(self, acfactory, lp):
-        ac1 = acfactory.get_one_online_account(move=True)
+        ac1 = acfactory.new_online_configuring_account(mvbox_move=True)
+        acfactory.bring_accounts_online()
         lp.sec("ac1: create self chat")
         chat = ac1.get_self_contact().create_chat()
         chat.send_text("hello")
@@ -962,7 +967,7 @@ class TestOnlineAccount:
 
     def test_send_dot(self, acfactory, lp):
         """Test that a single dot is properly escaped in SMTP protocol"""
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat = acfactory.get_accepted_chat(ac1, ac2)
 
         lp.sec("sending message")
@@ -973,10 +978,14 @@ class TestOnlineAccount:
         assert msg_in.text == msg_out.text
 
     def test_send_and_receive_message_markseen(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         # make DC's life harder wrt to encodings
         ac1.set_config("displayname", "ä name")
+
+        # clear any fresh device messages
+        ac1.get_device_chat().mark_noticed()
+        ac2.get_device_chat().mark_noticed()
 
         lp.sec("ac1: create chat with ac2")
         chat = ac1.create_chat(ac2)
@@ -1017,23 +1026,22 @@ class TestOnlineAccount:
         msg4 = ac2._evtracker.wait_next_incoming_message()
 
         lp.sec("mark messages as seen on ac2, wait for changes on ac1")
-        ac2.direct_imap.idle_start()
-        ac1.direct_imap.idle_start()
+        with ac1.direct_imap.idle() as idle1:
+            with ac2.direct_imap.idle() as idle2:
+                ac2.mark_seen_messages([msg2, msg4])
+                ev = ac2._evtracker.get_matching("DC_EVENT_MSGS_NOTICED")
+                assert msg2.chat.id == msg4.chat.id
+                assert ev.data1 == msg2.chat.id
+                assert ev.data2 == 0
 
-        ac2.mark_seen_messages([msg2, msg4])
-        ev = ac2._evtracker.get_matching("DC_EVENT_MSGS_NOTICED")
-        assert msg2.chat.id == msg4.chat.id
-        assert ev.data1 == msg2.chat.id
-        assert ev.data2 == 0
-
-        ac2.direct_imap.idle_wait_for_new_message(terminate=True)
-        lp.step("1")
-        for i in range(2):
-            ev = ac1._evtracker.get_matching("DC_EVENT_MSG_READ")
-            assert ev.data1 > const.DC_CHAT_ID_LAST_SPECIAL
-            assert ev.data2 > const.DC_MSG_ID_LAST_SPECIAL
-        lp.step("2")
-        ac1.direct_imap.idle_wait_for_seen()  # Check that ac1 marks the read receipt as read
+                idle2.wait_for_new_message()
+            lp.step("1")
+            for i in range(2):
+                ev = ac1._evtracker.get_matching("DC_EVENT_MSG_READ")
+                assert ev.data1 > const.DC_CHAT_ID_LAST_SPECIAL
+                assert ev.data2 > const.DC_MSG_ID_LAST_SPECIAL
+            lp.step("2")
+            idle1.wait_for_seen()  # Check that ac1 marks the read receipt as read
 
         assert msg1.is_out_mdn_received()
         assert msg3.is_out_mdn_received()
@@ -1048,39 +1056,36 @@ class TestOnlineAccount:
 
     def test_moved_markseen(self, acfactory, lp):
         """Test that message already moved to DeltaChat folder is marked as seen."""
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.get_online_configuring_account(move=True)
-        acfactory.wait_configure_and_start_io([ac1, ac2])
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account(mvbox_move=True)
+        acfactory.bring_accounts_online()
 
         ac2.stop_io()
-        ac2.direct_imap.idle_start()
-
-        ac1.create_chat(ac2).send_text("Hello!")
-
-        ac2.direct_imap.idle_wait_for_new_message(terminate=True)
+        with ac2.direct_imap.idle() as idle2:
+            ac1.create_chat(ac2).send_text("Hello!")
+            idle2.wait_for_new_message()
 
         # Emulate moving of the message to DeltaChat folder by Sieve rule.
-        # mailcow server contains this rule by default.
         ac2.direct_imap.conn.move(["*"], "DeltaChat")
-
         ac2.direct_imap.select_folder("DeltaChat")
-        ac2.direct_imap.idle_start()
-        ac2.start_io()
-        msg = ac2._evtracker.wait_next_incoming_message()
 
-        # Accept the contact request.
-        msg.chat.accept()
-        ac2.mark_seen_messages([msg])
-        uid = ac2.direct_imap.idle_wait_for_seen(terminate=True)
+        with ac2.direct_imap.idle() as idle2:
+            ac2.start_io()
+            msg = ac2._evtracker.wait_next_incoming_message()
+
+            # Accept the contact request.
+            msg.chat.accept()
+            ac2.mark_seen_messages([msg])
+            uid = idle2.wait_for_seen()
 
         assert len([a for a in ac2.direct_imap.conn.fetch(AND(seen=True, uid=U(uid, "*")))]) == 1
 
     def test_multidevice_sync_seen(self, acfactory, lp):
         """Test that message marked as seen on one device is marked as seen on another."""
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.get_online_configuring_account()
-        ac1_clone = acfactory.clone_online_account(ac1)
-        acfactory.wait_configure_and_start_io()
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account()
+        ac1_clone = acfactory.new_online_configuring_account(cloned_from=ac1)
+        acfactory.bring_accounts_online()
 
         ac1.set_config("bcc_self", "1")
         ac1_clone.set_config("bcc_self", "1")
@@ -1132,11 +1137,10 @@ class TestOnlineAccount:
         assert "Expires: " in ac1_clone_message.get_message_info()
 
     def test_message_override_sender_name(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
+        ac1.set_config("displayname", "ac1-default-displayname")
         chat = acfactory.get_accepted_chat(ac1, ac2)
         overridden_name = "someone else"
-
-        ac1.set_config("displayname", "ac1")
 
         lp.sec("sending text message with overridden name from ac1 to ac2")
         msg1 = Message.new_empty(ac1, "text")
@@ -1148,7 +1152,9 @@ class TestOnlineAccount:
         lp.sec("wait for ac2 to receive message")
         msg2 = ac2._evtracker.wait_next_incoming_message()
         assert msg2.text == "message1"
-        assert msg2.get_sender_contact().name == ac1.get_config("displayname")
+        sender = msg2.get_sender_contact()
+        assert sender.addr == ac1.get_config("addr")
+        assert sender.name == ac1.get_config("displayname")
         assert msg2.override_sender_name == overridden_name
 
         lp.sec("sending normal text message from ac1 to ac2")
@@ -1167,31 +1173,27 @@ class TestOnlineAccount:
     def test_markseen_message_and_mdn(self, acfactory, mvbox_move):
         # Please only change this test if you are very sure that it will still catch the issues it catches now.
         # We had so many problems with markseen, if in doubt, rather create another test, it can't harm.
-        ac1 = acfactory.get_online_configuring_account(move=mvbox_move)
-        ac2 = acfactory.get_online_configuring_account(move=mvbox_move)
-
-        acfactory.wait_configure_and_start_io()
+        ac1 = acfactory.new_online_configuring_account(mvbox_move=mvbox_move)
+        ac2 = acfactory.new_online_configuring_account(mvbox_move=mvbox_move)
+        acfactory.bring_accounts_online()
         # Do not send BCC to self, we only want to test MDN on ac1.
         ac1.set_config("bcc_self", "0")
 
         folder = "mvbox" if mvbox_move else "inbox"
         ac1.direct_imap.select_config_folder(folder)
         ac2.direct_imap.select_config_folder(folder)
-        ac1.direct_imap.idle_start()
-        ac2.direct_imap.idle_start()
+        with ac1.direct_imap.idle() as idle1:
+            with ac2.direct_imap.idle() as idle2:
+                acfactory.get_accepted_chat(ac1, ac2).send_text("hi")
+                msg = ac2._evtracker.wait_next_incoming_message()
 
-        acfactory.get_accepted_chat(ac1, ac2).send_text("hi")
-        msg = ac2._evtracker.wait_next_incoming_message()
+                ac2.mark_seen_messages([msg])
 
-        ac2.mark_seen_messages([msg])
-
-        ac1.direct_imap.idle_wait_for_seen()  # Check that the mdn is marked as seen
-        ac2.direct_imap.idle_wait_for_seen()  # Check that the original message is marked as seen
-        ac1.direct_imap.idle_done()
-        ac2.direct_imap.idle_done()
+                idle2.wait_for_seen()  # Check original message is marked as seen
+                idle1.wait_for_seen()  # Check that the mdn is marked as seen
 
     def test_reply_privately(self, acfactory):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         group1 = ac1.create_group_chat("group")
         group1.add_contact(ac2)
@@ -1215,7 +1217,9 @@ class TestOnlineAccount:
         assert msg_reply1.chat.id == private_chat1.id
 
     def test_mdn_asymmetric(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts(move=True)
+        ac1 = acfactory.new_online_configuring_account(mvbox_move=True)
+        ac2 = acfactory.new_online_configuring_account()
+        acfactory.bring_accounts_online()
 
         lp.sec("ac1: create chat with ac2")
         chat = ac1.create_chat(ac2)
@@ -1239,25 +1243,26 @@ class TestOnlineAccount:
         assert len(msg.chat.get_messages()) == 1
 
         ac1.direct_imap.select_config_folder("mvbox")
-        ac1.direct_imap.idle_start()
+        with ac1.direct_imap.idle() as idle1:
+            lp.sec("ac2: mark incoming message as seen")
+            ac2.mark_seen_messages([msg])
 
-        lp.sec("ac2: mark incoming message as seen")
-        ac2.mark_seen_messages([msg])
+            lp.sec("ac1: waiting for incoming activity")
+            # MDN should be moved even though MDNs are already disabled
+            ac1._evtracker.get_matching("DC_EVENT_IMAP_MESSAGE_MOVED")
 
-        lp.sec("ac1: waiting for incoming activity")
-        # MDN should be moved even though MDNs are already disabled
-        ac1._evtracker.get_matching("DC_EVENT_IMAP_MESSAGE_MOVED")
+            assert len(chat.get_messages()) == 1
 
-        assert len(chat.get_messages()) == 1
-
-        # Wait for the message to be marked as seen on IMAP.
-        assert ac1.direct_imap.idle_wait_for_seen()
+            # Wait for the message to be marked as seen on IMAP.
+            assert idle1.wait_for_seen()
 
         # MDN is received even though MDNs are already disabled
         assert msg_out.is_out_mdn_received()
 
     def test_send_and_receive_will_encrypt_decrypt(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
+
+        ac1.get_device_chat().mark_noticed()
 
         lp.sec("ac1: create chat with ac2")
         chat = ac1.create_chat(ac2)
@@ -1303,7 +1308,7 @@ class TestOnlineAccount:
         """Test that gossip timestamp is updated when someone else sends gossip,
         so we don't have to send gossip ourselves.
         """
-        ac1, ac2, ac3 = acfactory.get_many_online_accounts(3)
+        ac1, ac2, ac3 = acfactory.get_online_accounts(3)
 
         acfactory.introduce_each_other([ac1, ac2])
         acfactory.introduce_each_other([ac2, ac3])
@@ -1338,7 +1343,7 @@ class TestOnlineAccount:
         This is a Delta Chat extension to Autocrypt 1.1.0, which Autocrypt-Gossip headers
         SHOULD NOT contain encryption preference.
         """
-        ac1, ac2, ac3 = acfactory.get_many_online_accounts(3)
+        ac1, ac2, ac3 = acfactory.get_online_accounts(3)
 
         lp.sec("ac1 learns that ac2 prefers encryption")
         ac1.create_chat(ac2)
@@ -1392,7 +1397,7 @@ class TestOnlineAccount:
         assert msg.is_encrypted()
 
     def test_send_first_message_as_long_unicode_with_cr(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         ac2.set_config("save_mime_headers", "1")
 
         lp.sec("ac1: create chat with ac2")
@@ -1422,7 +1427,7 @@ class TestOnlineAccount:
 
     def test_no_draft_if_cant_send(self, acfactory):
         """Tests that no quote can be set if the user can't send to this chat"""
-        ac1 = acfactory.get_one_online_account()
+        ac1, = acfactory.get_online_accounts(1)
         device_chat = ac1.get_device_chat()
         msg = Message.new_empty(ac1, "text")
         device_chat.set_draft(msg)
@@ -1437,19 +1442,17 @@ class TestOnlineAccount:
         If the draft email is sent out later (i.e. moved to "Sent"), it must be shown.
 
         Also, test that unknown emails in the Spam folder are not shown."""
-        ac1 = acfactory.get_online_configuring_account()
+        ac1 = acfactory.new_online_configuring_account()
         ac1.set_config("show_emails", "2")
         ac1.create_contact("alice@example.org").create_chat()
 
-        acfactory.wait_configure(ac1)
+        acfactory.wait_configured(ac1)
         ac1.direct_imap.create_folder("Drafts")
         ac1.direct_imap.create_folder("Sent")
         ac1.direct_imap.create_folder("Spam")
         ac1.direct_imap.create_folder("Junk")
 
-        acfactory.wait_configure_and_start_io()
-        # Wait until each folder was selected once and we are IDLEing again:
-        ac1._evtracker.get_info_contains("INBOX: Idle entering wait-on-remote state")
+        acfactory.bring_accounts_online()
         ac1.stop_io()
 
         ac1.direct_imap.append("Drafts", """
@@ -1496,7 +1499,7 @@ class TestOnlineAccount:
         msg = ac1._evtracker.wait_next_messages_changed()
 
         # Wait until each folder was scanned, this is necessary for this test to test what it should test:
-        ac1._evtracker.get_info_contains("INBOX: Idle entering wait-on-remote state")
+        ac1._evtracker.wait_idle_inbox_ready()
 
         assert msg.text == "subj – message in Sent"
         assert len(msg.chat.get_messages()) == 1
@@ -1518,10 +1521,10 @@ class TestOnlineAccount:
         assert len(msg.chat.get_messages()) == 2
 
     def test_no_old_msg_is_fresh(self, acfactory, lp):
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.get_online_configuring_account()
-        ac1_clone = acfactory.clone_online_account(ac1)
-        acfactory.wait_configure_and_start_io()
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account()
+        ac1_clone = acfactory.new_online_configuring_account(cloned_from=ac1)
+        acfactory.bring_accounts_online()
 
         ac1.set_config("e2ee_enabled", "0")
         ac1_clone.set_config("e2ee_enabled", "0")
@@ -1531,6 +1534,8 @@ class TestOnlineAccount:
 
         ac1.create_chat(ac2)
         ac1_clone.create_chat(ac2)
+
+        ac1.get_device_chat().mark_noticed()
 
         lp.sec("Send a first message from ac2 to ac1 and check that it's 'fresh'")
         first_msg_id = ac2.create_chat(ac1).send_text("Hi")
@@ -1548,7 +1553,7 @@ class TestOnlineAccount:
 
     def test_prefer_encrypt(self, acfactory, lp):
         """Test quorum rule for encryption preference in 1:1 and group chat."""
-        ac1, ac2, ac3 = acfactory.get_many_online_accounts(3)
+        ac1, ac2, ac3 = acfactory.get_online_accounts(3)
         ac1.set_config("e2ee_enabled", "0")
         ac2.set_config("e2ee_enabled", "1")
         ac3.set_config("e2ee_enabled", "0")
@@ -1598,7 +1603,7 @@ class TestOnlineAccount:
 
     def test_bot(self, acfactory, lp):
         """Test that bot messages can be identified as such"""
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         ac1.set_config("bot", "0")
         ac2.set_config("bot", "1")
 
@@ -1625,7 +1630,7 @@ class TestOnlineAccount:
 
     def test_quote_encrypted(self, acfactory, lp):
         """Test that replies to encrypted messages with quotes are encrypted."""
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         lp.sec("ac1: create chat with ac2")
         chat = ac1.create_chat(ac2)
@@ -1675,7 +1680,7 @@ class TestOnlineAccount:
 
     def test_quote_attachment(self, tmpdir, acfactory, lp):
         """Test that replies with an attachment and a quote are received correctly."""
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         lp.sec("ac1 creates chat with ac2")
         chat1 = ac1.create_chat(ac2)
@@ -1707,7 +1712,7 @@ class TestOnlineAccount:
         assert open(received_reply.filename).read() == "data to send"
 
     def test_saved_mime_on_received_message(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         lp.sec("configure ac2 to save mime headers, create ac1/ac2 chat")
         ac2.set_config("save_mime_headers", "1")
@@ -1725,8 +1730,8 @@ class TestOnlineAccount:
         assert mime.get_all("From")
         assert mime.get_all("Received")
 
-    def test_send_mark_seen_clean_incoming_events(self, acfactory, lp, data):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+    def test_send_mark_seen_clean_incoming_events(self, acfactory, lp):
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat = acfactory.get_accepted_chat(ac1, ac2)
 
         message_queue = queue.Queue()
@@ -1755,7 +1760,7 @@ class TestOnlineAccount:
                 break
 
     def test_send_and_receive_image(self, acfactory, lp, data):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat = ac1.create_chat(ac2)
 
         message_queue = queue.Queue()
@@ -1800,7 +1805,7 @@ class TestOnlineAccount:
         assert m == msg_in
 
     def test_import_export_online_all(self, acfactory, tmpdir, data, lp):
-        ac1 = acfactory.get_one_online_account()
+        ac1, = acfactory.get_online_accounts(1)
 
         lp.sec("create some chat content")
         chat1 = ac1.create_contact("some1@example.org", name="some1").create_chat()
@@ -1883,9 +1888,9 @@ class TestOnlineAccount:
         # note that the receiving account needs to be configured and running
         # before ther setup message is send. DC does not read old messages
         # as of Jul2019
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.clone_online_account(ac1)
-        acfactory.wait_configure_and_start_io()
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account(cloned_from=ac1)
+        acfactory.bring_accounts_online()
 
         lp.sec("trigger ac setup message and return setupcode")
         assert ac1.get_info()["fingerprint"] != ac2.get_info()["fingerprint"]
@@ -1904,9 +1909,9 @@ class TestOnlineAccount:
         assert ac1.get_info()["fingerprint"] == ac2.get_info()["fingerprint"]
 
     def test_ac_setup_message_twice(self, acfactory, lp):
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.clone_online_account(ac1)
-        acfactory.wait_configure_and_start_io()
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account(cloned_from=ac1)
+        acfactory.bring_accounts_online()
 
         lp.sec("trigger ac setup message but ignore")
         assert ac1.get_info()["fingerprint"] != ac2.get_info()["fingerprint"]
@@ -1925,7 +1930,7 @@ class TestOnlineAccount:
         assert ac1.get_info()["fingerprint"] == ac2.get_info()["fingerprint"]
 
     def test_qr_setup_contact(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         lp.sec("ac1: create QR code and let ac2 scan it, starting the securejoin")
         qr = ac1.get_setup_contact_qr()
 
@@ -1935,7 +1940,7 @@ class TestOnlineAccount:
         ac1._evtracker.wait_securejoin_inviter_progress(1000)
 
     def test_qr_join_chat(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         lp.sec("ac1: create QR code and let ac2 scan it, starting the securejoin")
         chat = ac1.create_group_chat("hello")
         qr = chat.get_join_qr()
@@ -1949,7 +1954,7 @@ class TestOnlineAccount:
         ac1._evtracker.wait_securejoin_inviter_progress(1000)
 
     def test_qr_verified_group_and_chatting(self, acfactory, lp):
-        ac1, ac2, ac3 = acfactory.get_many_online_accounts(3)
+        ac1, ac2, ac3 = acfactory.get_online_accounts(3)
         lp.sec("ac1: create verified-group QR, ac2 scans and joins")
         chat1 = ac1.create_group_chat("hello", verified=True)
         assert chat1.is_protected()
@@ -2005,7 +2010,7 @@ class TestOnlineAccount:
 
     def test_set_get_contact_avatar(self, acfactory, data, lp):
         lp.sec("configuring ac1 and ac2")
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         lp.sec("set ac1 and ac2 profile images")
         p = data.get_path("d.png")
@@ -2044,7 +2049,7 @@ class TestOnlineAccount:
         assert msg6.get_sender_contact().get_profile_image() is None
 
     def test_add_remove_member_remote_events(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         ac1_addr = ac1.get_config("addr")
         # activate local plugin for ac2
         in_list = queue.Queue()
@@ -2123,7 +2128,7 @@ class TestOnlineAccount:
         Also tests blocking in general.
         """
         lp.sec("Create a group chat with ac1 and ac2")
-        (ac1, ac2) = acfactory.get_two_online_accounts()
+        (ac1, ac2) = acfactory.get_online_accounts(2)
         acfactory.introduce_each_other((ac1, ac2))
         chat_on_ac1 = ac1.create_group_chat("title", contacts=[ac2])
         chat_on_ac1.send_text("First group message")
@@ -2158,7 +2163,7 @@ class TestOnlineAccount:
         assert not ac1.get_self_contact() in chat_on_ac1.get_contacts()
 
     def test_set_get_group_image(self, acfactory, data, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         lp.sec("create unpromoted group chat")
         chat = ac1.create_group_chat("hello")
@@ -2209,7 +2214,7 @@ class TestOnlineAccount:
         assert chat.get_profile_image() is None
 
     def test_connectivity(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         ac1.set_config("scan_all_folders_debounce_secs", "0")
 
         ac1._evtracker.wait_for_connectivity(const.DC_CONNECTIVITY_CONNECTED)
@@ -2226,12 +2231,10 @@ class TestOnlineAccount:
                "all messages are fetched")
 
         ac1.direct_imap.select_config_folder("inbox")
-        ac1.direct_imap.idle_start()
-        ac2.create_chat(ac1).send_text("Hi")
-
-        ac1.direct_imap.idle_wait_for_new_message(terminate=True)
+        with ac1.direct_imap.idle() as idle1:
+            ac2.create_chat(ac1).send_text("Hi")
+            idle1.wait_for_new_message()
         ac1.maybe_network()
-
         ac1._evtracker.wait_for_all_work_done()
         msgs = ac1.create_chat(ac2).get_messages()
         assert len(msgs) == 1
@@ -2261,10 +2264,9 @@ class TestOnlineAccount:
         ac1.create_contact(ac2).block()
 
         ac1.direct_imap.select_config_folder("inbox")
-        ac1.direct_imap.idle_start()
-        ac2.create_chat(ac1).send_text("Hi")
-
-        ac1.direct_imap.idle_wait_for_new_message(terminate=True)
+        with ac1.direct_imap.idle() as idle1:
+            ac2.create_chat(ac1).send_text("Hi")
+            idle1.wait_for_new_message()
         ac1.maybe_network()
 
         while 1:
@@ -2288,7 +2290,7 @@ class TestOnlineAccount:
 
         See https://github.com/deltachat/deltachat-core-rust/issues/2429.
         """
-        ac1 = acfactory.get_one_online_account()
+        ac1, = acfactory.get_online_accounts(1)
         ac1.stop_io()
 
         ac1.direct_imap.append("INBOX", """
@@ -2325,7 +2327,7 @@ class TestOnlineAccount:
 
     def test_send_receive_locations(self, acfactory, lp):
         now = datetime.now(timezone.utc)
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         lp.sec("ac1: create chat with ac2")
         chat1 = ac1.create_chat(ac2)
@@ -2382,19 +2384,20 @@ class TestOnlineAccount:
         """
 
         lp.sec("creating and configuring three accounts")
-        ac1, ac2, ac3 = acfactory.get_many_online_accounts(3)
+        ac1, ac2, ac3 = acfactory.get_online_accounts(3)
 
         acfactory.introduce_each_other([ac1, ac2, ac3])
 
         lp.sec("ac3 reinstalls DC and generates a new key")
         ac3.stop_io()
-        ac4 = acfactory.clone_online_account(ac3, pre_generated_key=False)
-        ac4._configtracker.wait_finish()
+        acfactory.remove_preconfigured_keys()
+        ac4 = acfactory.new_online_configuring_account(cloned_from=ac3)
+        acfactory.wait_configured(ac4)
         # Create contacts to make sure incoming messages are not treated as contact requests
         chat41 = ac4.create_chat(ac1)
         chat42 = ac4.create_chat(ac2)
         ac4.start_io()
-        ac4._evtracker.wait_all_initial_fetches()
+        ac4._evtracker.wait_idle_inbox_ready()
 
         lp.sec("ac1: creating group chat with 2 other members")
         chat = ac1.create_group_chat("title", contacts=[ac2, ac3])
@@ -2446,13 +2449,13 @@ class TestOnlineAccount:
         assert msg.chat == ac2.create_chat(ac4)
 
     def test_immediate_autodelete(self, acfactory, lp):
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.get_online_configuring_account(move=False, sentbox=False)
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account()
 
         # "1" means delete immediately, while "0" means do not delete
         ac2.set_config("delete_server_after", "1")
 
-        acfactory.wait_configure_and_start_io()
+        acfactory.bring_accounts_online()
 
         lp.sec("ac1: create chat with ac2")
         chat1 = ac1.create_chat(ac2)
@@ -2477,7 +2480,7 @@ class TestOnlineAccount:
         assert ev.data2 == sent_msg.id
 
     def test_ephemeral_timer(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         lp.sec("ac1: create chat with ac2")
         chat1 = ac1.create_chat(ac2)
@@ -2535,7 +2538,7 @@ class TestOnlineAccount:
         assert chat1.get_ephemeral_timer() == 0
 
     def test_delete_multiple_messages(self, acfactory, lp):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         chat12 = acfactory.get_accepted_chat(ac1, ac2)
 
         lp.sec("ac1: sending seven messages")
@@ -2562,8 +2565,9 @@ class TestOnlineAccount:
         ac2.direct_imap.select_config_folder("inbox")
         assert len(ac2.direct_imap.get_all_messages()) == 1
 
-    def test_configure_error_msgs(self, acfactory):
-        ac1, configdict = acfactory.get_online_config()
+    def test_configure_error_msgs_wrong_pw(self, acfactory):
+        configdict = acfactory.get_next_liveconfig()
+        ac1 = acfactory.get_unconfigured_account()
         ac1.update_config(configdict)
         ac1.set_config("mail_pw", "abc")  # Wrong mail pw
         ac1.configure()
@@ -2574,9 +2578,10 @@ class TestOnlineAccount:
         # Password is wrong so it definitely has to say something about "password"
         assert "password" in ev.data2
 
-        ac2, configdict = acfactory.get_online_config()
-        ac2.update_config(configdict)
+    def test_configure_error_msgs_invalid_server(self, acfactory):
+        ac2 = acfactory.get_unconfigured_account()
         ac2.set_config("addr", "abc@def.invalid")  # mail server can't be reached
+        ac2.set_config("mail_pw", "123")
         ac2.configure()
         while True:
             ev = ac2._evtracker.get_matching("DC_EVENT_CONFIGURE_PROGRESS")
@@ -2594,7 +2599,7 @@ class TestOnlineAccount:
         assert "configuration" not in ev.data2.lower()
 
     def test_name_changes(self, acfactory):
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
         ac1.set_config("displayname", "Account 1")
 
         # Similar to acfactory.get_accepted_chat, but without setting the contact name.
@@ -2634,7 +2639,7 @@ class TestOnlineAccount:
 
     def test_status(self, acfactory):
         """Test that status is transferred over the network."""
-        ac1, ac2 = acfactory.get_two_online_accounts()
+        ac1, ac2 = acfactory.get_online_accounts(2)
 
         chat12 = acfactory.get_accepted_chat(ac1, ac2)
         ac1.set_config("selfstatus", "New status")
@@ -2667,7 +2672,7 @@ class TestOnlineAccount:
 
     def test_group_quote(self, acfactory, lp):
         """Test quoting in a group with a new member who have not seen the quoted message."""
-        ac1, ac2, ac3 = accounts = acfactory.get_many_online_accounts(3)
+        ac1, ac2, ac3 = accounts = acfactory.get_online_accounts(3)
         acfactory.introduce_each_other(accounts)
         chat = ac1.create_group_chat(name="quote group")
         chat.add_contact(ac2)
@@ -2715,25 +2720,25 @@ class TestOnlineAccount:
         """Delta Chat periodically scans all folders for new messages to make sure we don't miss any."""
         variant = folder + "-" + str(move) + "-" + expected_destination
         lp.sec("Testing variant " + variant)
-        ac1 = acfactory.get_online_configuring_account(move=move)
-        ac2 = acfactory.get_online_configuring_account()
+        ac1 = acfactory.new_online_configuring_account(mvbox_move=move)
+        ac2 = acfactory.new_online_configuring_account()
 
-        acfactory.wait_configure(ac1)
+        acfactory.wait_configured(ac1)
         ac1.direct_imap.create_folder(folder)
 
-        acfactory.wait_configure_and_start_io()
         # Wait until each folder was selected once and we are IDLEing:
-        ac1._evtracker.get_info_contains("INBOX: Idle entering wait-on-remote state")
+        acfactory.bring_accounts_online()
         ac1.stop_io()
+        assert folder in ac1.direct_imap.list_folders()
 
-        # Send a message to ac1 and move it to the mvbox:
+        lp.sec("Send a message to from ac2 to ac1 and manually move it to the mvbox")
         ac1.direct_imap.select_config_folder("inbox")
-        ac1.direct_imap.idle_start()
-        acfactory.get_accepted_chat(ac2, ac1).send_text("hello")
-        ac1.direct_imap.idle_wait_for_new_message(terminate=True)
+        with ac1.direct_imap.idle() as idle1:
+            acfactory.get_accepted_chat(ac2, ac1).send_text("hello")
+            idle1.wait_for_new_message()
         ac1.direct_imap.conn.move(["*"], folder)  # "*" means "biggest UID in mailbox"
 
-        lp.sec("Everything prepared, now see if DeltaChat finds the message (" + variant + ")")
+        lp.sec("start_io() and see if DeltaChat finds the message (" + variant + ")")
         ac1.set_config("scan_all_folders_debounce_secs", "0")
         ac1.start_io()
         msg = ac1._evtracker.wait_next_incoming_message()
@@ -2762,11 +2767,9 @@ class TestOnlineAccount:
             if mvbox_move:
                 assert ac.get_config("configured_mvbox_folder")
 
-        ac1 = acfactory.get_online_configuring_account(move=mvbox_move)
-        ac2 = acfactory.get_online_configuring_account()
-
-        acfactory.wait_configure(ac1)
-
+        ac1 = acfactory.new_online_configuring_account(mvbox_move=mvbox_move)
+        ac2 = acfactory.new_online_configuring_account()
+        acfactory.wait_configured(ac1)
         ac1.direct_imap.create_folder("Sent")
         ac1.set_config("sentbox_watch", "1")
 
@@ -2775,27 +2778,26 @@ class TestOnlineAccount:
         # would also find the "Sent" folder, but it would be too late:
         # The sentbox thread, started by `start_io()`, would have seen that there is no
         # ConfiguredSentboxFolder and do nothing.
-        ac1._configtracker = ac1.configure(reconfigure=True)
-        acfactory.wait_configure_and_start_io()
+        acfactory._acsetup.start_configure(ac1, reconfigure=True)
+        acfactory.bring_accounts_online()
         assert_folders_configured(ac1)
 
         assert ac1.direct_imap.select_config_folder("mvbox" if mvbox_move else "inbox")
-        ac1.direct_imap.idle_start()
+        with ac1.direct_imap.idle() as idle1:
+            lp.sec("send out message with bcc to ourselves")
+            ac1.set_config("bcc_self", "1")
+            chat = acfactory.get_accepted_chat(ac1, ac2)
+            chat.send_text("message text")
+            assert_folders_configured(ac1)
 
-        lp.sec("send out message with bcc to ourselves")
-        ac1.set_config("bcc_self", "1")
-        chat = acfactory.get_accepted_chat(ac1, ac2)
-        chat.send_text("message text")
-        assert_folders_configured(ac1)
-
-        lp.sec("wait until the bcc_self message arrives in correct folder and is marked seen")
-        assert ac1.direct_imap.idle_wait_for_seen()
+            lp.sec("wait until the bcc_self message arrives in correct folder and is marked seen")
+            assert idle1.wait_for_seen()
         assert_folders_configured(ac1)
 
         lp.sec("create a cloned ac1 and fetch contact history during configure")
-        ac1_clone = acfactory.clone_online_account(ac1)
+        ac1_clone = acfactory.new_online_configuring_account(cloned_from=ac1)
         ac1_clone.set_config("fetch_existing_msgs", "1")
-        ac1_clone._configtracker.wait_finish()
+        acfactory.wait_configured(ac1_clone)
         ac1_clone.start_io()
         assert_folders_configured(ac1_clone)
 
@@ -2820,35 +2822,36 @@ class TestOnlineAccount:
         So, after fetch-existing-msgs you have one contact request and one chat with the same person.
 
         See https://github.com/deltachat/deltachat-core-rust/issues/2097"""
-        ac1 = acfactory.get_online_configuring_account()
-        ac2 = acfactory.get_online_configuring_account()
+        ac1 = acfactory.new_online_configuring_account()
+        ac2 = acfactory.new_online_configuring_account()
 
-        acfactory.wait_configure_and_start_io()
+        acfactory.bring_accounts_online()
 
         lp.sec("receive a message")
         ac2.create_group_chat("group name", contacts=[ac1]).send_text("incoming, unencrypted group message")
         ac1._evtracker.wait_next_incoming_message()
 
         lp.sec("send out message with bcc to ourselves")
-        ac1.direct_imap.idle_start()
-        ac1.set_config("bcc_self", "1")
-        ac1.create_chat(ac2).send_text("outgoing, encrypted direct message, creating a chat")
-
-        # now wait until the bcc_self message arrives
-        assert ac1.direct_imap.idle_wait_for_seen()
+        with ac1.direct_imap.idle() as idle1:
+            ac1.set_config("bcc_self", "1")
+            ac1_ac2_chat = ac1.create_chat(ac2)
+            ac1_ac2_chat.send_text("outgoing, encrypted direct message, creating a chat")
+            # wait until the bcc_self message arrives
+            assert idle1.wait_for_seen()
 
         lp.sec("Clone online account and let it fetch the existing messages")
-        ac1_clone = acfactory.clone_online_account(ac1)
+        ac1_clone = acfactory.new_online_configuring_account(cloned_from=ac1)
         ac1_clone.set_config("fetch_existing_msgs", "1")
-        ac1_clone._configtracker.wait_finish()
+        acfactory.wait_configured(ac1_clone)
 
         ac1_clone.start_io()
-        ac1_clone._evtracker.wait_all_initial_fetches()
+        ac1_clone._evtracker.wait_idle_inbox_ready()
+
         chats = ac1_clone.get_chats()
         assert len(chats) == 4  # two newly created chats + self-chat + device-chat
         group_chat = [c for c in chats if c.get_name() == "group name"][0]
         assert group_chat.is_group()
-        private_chat = [c for c in chats if c.get_name() == "ac2"][0]
+        private_chat, = [c for c in chats if c.get_name() == ac1_ac2_chat.get_name()]
         assert not private_chat.is_group()
 
         group_messages = group_chat.get_messages()
@@ -2860,13 +2863,13 @@ class TestOnlineAccount:
 
     def test_delete_deltachat_folder(self, acfactory):
         """Test that DeltaChat folder is recreated if user deletes it manually."""
-        ac1 = acfactory.get_online_configuring_account(move=True)
-        ac2 = acfactory.get_online_configuring_account()
-        acfactory.wait_configure(ac1)
+        ac1 = acfactory.new_online_configuring_account(mvbox_move=True)
+        ac2 = acfactory.new_online_configuring_account()
+        acfactory.wait_configured(ac1)
 
         ac1.direct_imap.conn.folder.delete("DeltaChat")
         assert "DeltaChat" not in ac1.direct_imap.list_folders()
-        acfactory.wait_configure_and_start_io()
+        acfactory.bring_accounts_online()
 
         ac2.create_chat(ac1).send_text("hello")
         msg = ac1._evtracker.wait_next_incoming_message()
@@ -2877,7 +2880,7 @@ class TestOnlineAccount:
 
 class TestGroupStressTests:
     def test_group_many_members_add_leave_remove(self, acfactory, lp):
-        accounts = acfactory.get_many_online_accounts(5)
+        accounts = acfactory.get_online_accounts(5)
         acfactory.introduce_each_other(accounts)
         ac1, ac5 = accounts.pop(), accounts.pop()
 
@@ -2933,7 +2936,7 @@ class TestGroupStressTests:
 
         lp.sec("ac2: receiving system message about contact addition")
         sysmsg = ac2._evtracker.wait_next_incoming_message()
-        assert ac5.addr in sysmsg.text
+        assert ac5.get_config("configured_addr") in sysmsg.text
         assert sysmsg.chat.num_contacts() == 4
 
         lp.sec("ac5: waiting for message about addition to the chat")
@@ -2950,7 +2953,7 @@ class TestGroupStressTests:
         ac2 did not see that ac3 is removed, so it should rebuild member list from scratch.
         """
         lp.sec("setting up accounts, accepted with each other")
-        accounts = acfactory.get_many_online_accounts(3)
+        accounts = acfactory.get_online_accounts(3)
         acfactory.introduce_each_other(accounts)
         ac1, ac2, ac3 = accounts
 
@@ -2995,22 +2998,27 @@ class TestGroupStressTests:
 
 class TestOnlineConfigureFails:
     def test_invalid_password(self, acfactory):
-        ac1, configdict = acfactory.get_online_config()
+        configdict = acfactory.get_next_liveconfig()
+        ac1 = acfactory.get_unconfigured_account()
         ac1.update_config(dict(addr=configdict["addr"], mail_pw="123"))
         configtracker = ac1.configure()
         configtracker.wait_progress(500)
         configtracker.wait_progress(0)
 
     def test_invalid_user(self, acfactory):
-        ac1, configdict = acfactory.get_online_config()
-        ac1.update_config(dict(addr="x" + configdict["addr"], mail_pw=configdict["mail_pw"]))
+        configdict = acfactory.get_next_liveconfig()
+        ac1 = acfactory.get_unconfigured_account()
+        configdict["addr"] = "x" + configdict["addr"]
+        ac1.update_config(configdict)
         configtracker = ac1.configure()
         configtracker.wait_progress(500)
         configtracker.wait_progress(0)
 
     def test_invalid_domain(self, acfactory):
-        ac1, configdict = acfactory.get_online_config()
-        ac1.update_config((dict(addr=configdict["addr"] + "x", mail_pw=configdict["mail_pw"])))
+        configdict = acfactory.get_next_liveconfig()
+        ac1 = acfactory.get_unconfigured_account()
+        configdict["addr"] += "x"
+        ac1.update_config(configdict)
         configtracker = ac1.configure()
         configtracker.wait_progress(500)
         configtracker.wait_progress(0)

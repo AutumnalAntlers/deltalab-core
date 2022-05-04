@@ -22,6 +22,29 @@ class MissingCredentials(ValueError):
     """ Account is missing `addr` and `mail_pw` config values. """
 
 
+def get_core_info():
+    """ get some system info. """
+    from tempfile import NamedTemporaryFile
+
+    with NamedTemporaryFile() as path:
+        path.close()
+        return get_dc_info_as_dict(ffi.gc(
+            lib.dc_context_new(as_dc_charpointer(""), as_dc_charpointer(path.name), ffi.NULL),
+            lib.dc_context_unref,
+        ))
+
+
+def get_dc_info_as_dict(dc_context):
+    lines = from_dc_charpointer(lib.dc_get_info(dc_context))
+    info_dict = {}
+    for line in lines.split("\n"):
+        if not line.strip():
+            continue
+        key, value = line.split("=", 1)
+        info_dict[key.lower()] = value
+    return info_dict
+
+
 class Account(object):
     """ Each account is tied to a sqlite database file which is fully managed
     by the underlying deltachat core library.  All public Account methods are
@@ -67,6 +90,9 @@ class Account(object):
         """ re-enable logging. """
         self._logging = True
 
+    def __repr__(self):
+        return "<Account path={}>".format(self.db_path)
+
     # def __del__(self):
     #    self.shutdown()
 
@@ -81,14 +107,7 @@ class Account(object):
 
     def get_info(self) -> Dict[str, str]:
         """ return dictionary of built config parameters. """
-        lines = from_dc_charpointer(lib.dc_get_info(self._dc_context))
-        d = {}
-        for line in lines.split("\n"):
-            if not line.strip():
-                continue
-            key, value = line.split("=", 1)
-            d[key.lower()] = value
-        return d
+        return get_dc_info_as_dict(self._dc_context)
 
     def dump_account_info(self, logfile):
         def log(*args, **kwargs):
@@ -129,6 +148,8 @@ class Account(object):
         namebytes = name.encode("utf8")
         if namebytes == b"addr" and self.is_configured():
             raise ValueError("can not change 'addr' after account is configured.")
+        if isinstance(value, (int, bool)):
+            value = str(int(value))
         if value is not None:
             valuebytes = value.encode("utf8")
         else:
@@ -169,7 +190,7 @@ class Account(object):
         :returns: None
         """
         for key, value in kwargs.items():
-            self.set_config(key, str(value))
+            self.set_config(key, value)
 
     def is_configured(self) -> bool:
         """ determine if the account is configured already; an initial connection
@@ -569,6 +590,8 @@ class Account(object):
         """ add an account plugin which implements one or more of
         the :class:`deltachat.hookspec.PerAccount` hooks.
         """
+        if name and self._pm.has_plugin(name=name):
+            self._pm.unregister(name=name)
         self._pm.register(plugin, name=name)
         self._pm.check_pending()
         return plugin

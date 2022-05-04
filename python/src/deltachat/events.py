@@ -29,10 +29,12 @@ class FFIEventLogger:
     # to prevent garbled logging
     _loglock = threading.RLock()
 
-    def __init__(self, account) -> None:
+    def __init__(self, account, logid=None, init_time=None) -> None:
         self.account = account
-        self.logid = self.account.get_config("displayname")
-        self.init_time = time.time()
+        self.logid = logid or self.account.get_config("displayname")
+        if init_time is None:
+            init_time = time.time()
+        self.init_time = init_time
 
     @account_hookimpl
     def ac_process_ffi_event(self, ffi_event: FFIEvent) -> None:
@@ -156,14 +158,14 @@ class FFIEventTracker:
                 print("** SECUREJOINT-INVITER PROGRESS {}".format(target), self.account)
                 break
 
-    def wait_all_initial_fetches(self):
+    def wait_idle_inbox_ready(self):
         """Has to be called after start_io() to wait for fetch_existing_msgs to run
         so that new messages are not mistaken for old ones:
         - ac1 and ac2 are created
         - ac1 sends a message to ac2
         - ac2 is still running FetchExsistingMsgs job and thinks it's an existing, old message
         - therefore no DC_EVENT_INCOMING_MSG is sent"""
-        self.get_info_contains("Done fetching existing messages")
+        self.get_info_contains("INBOX: Idle entering")
 
     def wait_next_incoming_message(self):
         """ wait for and return next incoming message. """
@@ -219,6 +221,8 @@ class EventThread(threading.Thread):
             self._inner_run()
 
     def _inner_run(self):
+        if self._marked_for_shutdown or self.account._dc_context is None:
+            return
         event_emitter = ffi.gc(
             lib.dc_get_event_emitter(self.account._dc_context),
             lib.dc_event_emitter_unref,
@@ -248,7 +252,7 @@ class EventThread(threading.Thread):
                     hook = getattr(self.account._pm.hook, name)
                     hook(**kwargs)
             except Exception:
-                if self.account._dc_context is not None:
+                if not self._marked_for_shutdown and self.account._dc_context is not None:
                     raise
 
     def _map_ffi_event(self, ffi_event: FFIEvent):
