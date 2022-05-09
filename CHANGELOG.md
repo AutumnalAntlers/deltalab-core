@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+- send normal messages with higher priority than MDNs #3243
+- make Scheduler stateless #3302
+
+
+## 1.80.0
+
+### Changes
+- update provider database #3284
+- improve python bindings, tests and ci #3287 #3286 #3287 #3289 #3290 #3292
+
+### Fixes
+- fix escaping in generated QR-code-SVG #3295
+
+
 ## 1.79.0
 
 ### Changes
