@@ -5,6 +5,26 @@
 ### Changes
 - send normal messages with higher priority than MDNs #3243
 - make Scheduler stateless #3302
+- support `source_code_url` from Webxdc manifests #3314
+- support Webxdc document names and add `document` to `dc_msg_get_webxdc_info()` #3317
+- improve chat encryption info, make it easier to find contacts without keys #3318
+
+### API-Changes
+- deprecate unused `marker1before` argument of `dc_get_chat_msgs`
+  and remove `DC_MSG_ID_MARKER1` constant #3274
+
+### Added
+- Now the node-bindings are also part of this repository 🎉
+
+### Fixes
+- node: throw error when getting context with an invalid account id
+- node: throw error when instanciating a wrapper class on `null` (Context, Message, Chat, ChatList and so on)
+
+### Removed
+- node: remove unmaintained coverage scripts
+
+### Fixes
+- repair encrypted mails "mixed up" by Google Workspace "Append footer" function #3315
 
 
 ## 1.80.0

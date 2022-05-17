@@ -139,9 +139,6 @@ async fn get_self_fingerprint(context: &Context) -> Option<Fingerprint> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum JoinError {
-    #[error("An \"ongoing\" process is already running")]
-    OngoingRunning,
-
     #[error("Failed to send handshake message: {0}")]
     SendMessage(#[from] SendMsgError),
 
@@ -149,10 +146,6 @@ pub enum JoinError {
     // is supposed to create a contact for us.
     #[error("Unknown contact (this is a bug): {0}")]
     UnknownContact(#[source] anyhow::Error),
-
-    // Note that this can only occur if we failed to create the chat correctly.
-    #[error("Ongoing sender dropped (this is a bug)")]
-    OngoingSenderDropped,
 
     #[error("Other")]
     Other(#[from] anyhow::Error),
@@ -715,7 +708,7 @@ mod tests {
     use crate::chat;
     use crate::chat::ProtectionStatus;
     use crate::chatlist::Chatlist;
-    use crate::constants::Chattype;
+    use crate::constants::{Chattype, DC_GCM_ADDDAYMARKER};
     use crate::dc_receive_imf::dc_receive_imf;
     use crate::peerstate::Peerstate;
     use crate::test_utils::{TestContext, TestContextManager};
@@ -853,7 +846,7 @@ mod tests {
         // Check Alice got the verified message in her 1:1 chat.
         {
             let chat = alice.create_chat(&bob).await;
-            let msg_id = chat::get_chat_msgs(&alice.ctx, chat.get_id(), 0x1, None)
+            let msg_id = chat::get_chat_msgs(&alice.ctx, chat.get_id(), DC_GCM_ADDDAYMARKER)
                 .await
                 .unwrap()
                 .into_iter()
@@ -902,7 +895,7 @@ mod tests {
         // Check Bob got the verified message in his 1:1 chat.
         {
             let chat = bob.create_chat(&alice).await;
-            let msg_id = chat::get_chat_msgs(&bob.ctx, chat.get_id(), 0x1, None)
+            let msg_id = chat::get_chat_msgs(&bob.ctx, chat.get_id(), DC_GCM_ADDDAYMARKER)
                 .await
                 .unwrap()
                 .into_iter()
@@ -1209,7 +1202,7 @@ mod tests {
                 Blocked::Yes,
                 "Alice's 1:1 chat with Bob is not hidden"
             );
-            let msg_id = chat::get_chat_msgs(&alice.ctx, alice_chatid, 0x1, None)
+            let msg_id = chat::get_chat_msgs(&alice.ctx, alice_chatid, DC_GCM_ADDDAYMARKER)
                 .await
                 .unwrap()
                 .into_iter()
@@ -1254,7 +1247,7 @@ mod tests {
                 Blocked::Yes,
                 "Bob's 1:1 chat with Alice is not hidden"
             );
-            for item in chat::get_chat_msgs(&bob.ctx, bob_chatid, 0x1, None)
+            for item in chat::get_chat_msgs(&bob.ctx, bob_chatid, DC_GCM_ADDDAYMARKER)
                 .await
                 .unwrap()
             {
@@ -1264,7 +1257,7 @@ mod tests {
                     println!("msg {} text: {}", msg_id, text);
                 }
             }
-            let mut msg_iter = chat::get_chat_msgs(&bob.ctx, bob_chatid, 0x1, None)
+            let mut msg_iter = chat::get_chat_msgs(&bob.ctx, bob_chatid, DC_GCM_ADDDAYMARKER)
                 .await
                 .unwrap()
                 .into_iter();
