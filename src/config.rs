@@ -70,7 +70,7 @@ pub enum Config {
     #[strum(props(default = "0"))]
     SentboxWatch,
 
-    #[strum(props(default = "0"))]
+    #[strum(props(default = "1"))]
     MvboxMove,
 
     /// Watch for new messages in the "Mvbox" (aka DeltaChat folder) only.
@@ -83,7 +83,7 @@ pub enum Config {
     #[strum(props(default = "2"))] // also change ShowEmails.default() on changes
     ShowEmails,
 
-    #[strum(props(default = "1"))] // also change MediaQuality.default() on changes
+    #[strum(props(default = "0"))] // also change MediaQuality.default() on changes
     MediaQuality,
 
     /// If set to "1", on the first time `start_io()` is called after configuring,
@@ -103,7 +103,7 @@ pub enum Config {
     ///
     /// Value 1 is treated as "delete at once": messages are deleted
     /// immediately, without moving to DeltaChat folder.
-    #[strum(props(default = "1"))]
+    #[strum(props(default = "0"))]
     DeleteServerAfter,
 
     /// Timer in seconds after which the message is deleted from the

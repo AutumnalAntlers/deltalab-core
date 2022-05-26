@@ -61,7 +61,7 @@ pub enum MediaQuality {
 
 impl Default for MediaQuality {
     fn default() -> Self {
-        MediaQuality::Worse // also change Config.MediaQuality props(default) on changes
+        MediaQuality::Balanced // also change Config.MediaQuality props(default) on changes
     }
 }
 
