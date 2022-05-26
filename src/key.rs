@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Cursor;
 
-use anyhow::{format_err, Context as _, Result};
+use anyhow::{ensure, Context as _, Result};
 use async_trait::async_trait;
 use num_traits::FromPrimitive;
 use pgp::composed::Deserializable;
@@ -82,7 +82,7 @@ pub trait DcKey: Serialize + Deserializable + KeyTrait + Clone {
 
     /// The fingerprint for the key.
     fn fingerprint(&self) -> Fingerprint {
-        Fingerprint::new(KeyTrait::fingerprint(self)).expect("Invalid fingerprint from rpgp")
+        Fingerprint::new(KeyTrait::fingerprint(self))
     }
 }
 
@@ -204,29 +204,8 @@ async fn generate_keypair(context: &Context) -> Result<KeyPair> {
     let _guard = context.generating_key_mutex.lock().await;
 
     // Check if the key appeared while we were waiting on the lock.
-    match context
-        .sql
-        .query_row_optional(
-            r#"
-        SELECT public_key, private_key
-          FROM keypairs
-         WHERE addr=?1
-           AND is_default=1;
-        "#,
-            paramsv![addr],
-            |row| {
-                let pub_bytes: Vec<u8> = row.get(0)?;
-                let sec_bytes: Vec<u8> = row.get(1)?;
-                Ok((pub_bytes, sec_bytes))
-            },
-        )
-        .await?
-    {
-        Some((pub_bytes, sec_bytes)) => Ok(KeyPair {
-            addr,
-            public: SignedPublicKey::from_slice(&pub_bytes)?,
-            secret: SignedSecretKey::from_slice(&sec_bytes)?,
-        }),
+    match load_keypair(context, &addr).await? {
+        Some(key_pair) => Ok(key_pair),
         None => {
             let start = std::time::SystemTime::now();
             let keytype = KeyGenType::from_i32(context.get_config_int(Config::KeyGenType).await?)
@@ -244,6 +223,39 @@ async fn generate_keypair(context: &Context) -> Result<KeyPair> {
             Ok(keypair)
         }
     }
+}
+
+pub(crate) async fn load_keypair(
+    context: &Context,
+    addr: &EmailAddress,
+) -> Result<Option<KeyPair>> {
+    let res = context
+        .sql
+        .query_row_optional(
+            r#"
+        SELECT public_key, private_key
+          FROM keypairs
+         WHERE addr=?1
+           AND is_default=1;
+        "#,
+            paramsv![addr],
+            |row| {
+                let pub_bytes: Vec<u8> = row.get(0)?;
+                let sec_bytes: Vec<u8> = row.get(1)?;
+                Ok((pub_bytes, sec_bytes))
+            },
+        )
+        .await?;
+
+    Ok(if let Some((pub_bytes, sec_bytes)) = res {
+        Some(KeyPair {
+            addr: addr.clone(),
+            public: SignedPublicKey::from_slice(&pub_bytes)?,
+            secret: SignedSecretKey::from_slice(&sec_bytes)?,
+        })
+    } else {
+        None
+    })
 }
 
 /// Use of a [KeyPair] for encryption or decryption.
@@ -275,23 +287,20 @@ pub async fn store_self_keypair(
     keypair: &KeyPair,
     default: KeyPairUse,
 ) -> Result<()> {
-    // Everything should really be one transaction, more refactoring
-    // is needed for that.
+    let mut conn = context.sql.get_conn().await?;
+    let transaction = conn.transaction()?;
+
     let public_key = DcKey::to_bytes(&keypair.public);
     let secret_key = DcKey::to_bytes(&keypair.secret);
-    context
-        .sql
+    transaction
         .execute(
             "DELETE FROM keypairs WHERE public_key=? OR private_key=?;",
             paramsv![public_key, secret_key],
         )
-        .await
         .context("failed to remove old use of key")?;
     if default == KeyPairUse::Default {
-        context
-            .sql
+        transaction
             .execute("UPDATE keypairs SET is_default=0;", paramsv![])
-            .await
             .context("failed to clear default")?;
     }
     let is_default = match default {
@@ -302,15 +311,15 @@ pub async fn store_self_keypair(
     let addr = keypair.addr.to_string();
     let t = time();
 
-    context
-        .sql
+    transaction
         .execute(
             "INSERT INTO keypairs (addr, is_default, public_key, private_key, created)
                 VALUES (?,?,?,?,?);",
             paramsv![addr, is_default, public_key, secret_key, t],
         )
-        .await
         .context("failed to insert keypair")?;
+
+    transaction.commit()?;
 
     Ok(())
 }
@@ -320,11 +329,9 @@ pub async fn store_self_keypair(
 pub struct Fingerprint(Vec<u8>);
 
 impl Fingerprint {
-    pub fn new(v: Vec<u8>) -> Result<Fingerprint> {
-        match v.len() {
-            20 => Ok(Fingerprint(v)),
-            _ => Err(format_err!("Wrong fingerprint length")),
-        }
+    pub fn new(v: Vec<u8>) -> Fingerprint {
+        debug_assert_eq!(v.len(), 20);
+        Fingerprint(v)
     }
 
     /// Make a hex string from the fingerprint.
@@ -364,14 +371,15 @@ impl fmt::Display for Fingerprint {
 impl std::str::FromStr for Fingerprint {
     type Err = anyhow::Error;
 
-    fn from_str(input: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(input: &str) -> Result<Self> {
         let hex_repr: String = input
             .to_uppercase()
             .chars()
             .filter(|&c| ('0'..='9').contains(&c) || ('A'..='F').contains(&c))
             .collect();
-        let v: Vec<u8> = hex::decode(hex_repr)?;
-        let fp = Fingerprint::new(v)?;
+        let v: Vec<u8> = hex::decode(&hex_repr)?;
+        ensure!(v.len() == 20, "wrong fingerprint length: {}", hex_repr);
+        let fp = Fingerprint::new(v);
         Ok(fp)
     }
 }
@@ -589,8 +597,7 @@ i8pcjGO+IZffvyZJVRWfVooBJmWWbPB1pueo3tx8w3+fcuzpxz+RLFKaPyqXO+dD
     fn test_fingerprint_from_str() {
         let res = Fingerprint::new(vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-        ])
-        .unwrap();
+        ]);
 
         let fp: Fingerprint = "0102030405060708090A0B0c0d0e0F1011121314".parse().unwrap();
         assert_eq!(fp, res);
@@ -607,8 +614,7 @@ i8pcjGO+IZffvyZJVRWfVooBJmWWbPB1pueo3tx8w3+fcuzpxz+RLFKaPyqXO+dD
     fn test_fingerprint_hex() {
         let fp = Fingerprint::new(vec![
             1, 2, 4, 8, 16, 32, 64, 128, 255, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-        ])
-        .unwrap();
+        ]);
         assert_eq!(fp.hex(), "0102040810204080FF0A0B0C0D0E0F1011121314");
     }
 
@@ -616,8 +622,7 @@ i8pcjGO+IZffvyZJVRWfVooBJmWWbPB1pueo3tx8w3+fcuzpxz+RLFKaPyqXO+dD
     fn test_fingerprint_to_string() {
         let fp = Fingerprint::new(vec![
             1, 2, 4, 8, 16, 32, 64, 128, 255, 1, 2, 4, 8, 16, 32, 64, 128, 255, 19, 20,
-        ])
-        .unwrap();
+        ]);
         assert_eq!(
             fp.to_string(),
             "0102 0408 1020 4080 FF01\n0204 0810 2040 80FF 1314"
