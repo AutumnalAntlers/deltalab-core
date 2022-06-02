@@ -3,8 +3,16 @@
 ## Unreleased
 
 ### Changes
-- refactorings #3373
+- refactorings #3373 #3345 #3380 #3382
+- node: move split2 to devDependencies
+- python: build Python 3.10 wheels #3392
+
+
+### Fixes
 - delete outgoing MDNs found in the Sent folder on Gmail #3372
+- fix searching one-to-one chats #3377
+- do not add legacy info-messages on resending webxdc #3389
+
 
 ## 1.84.0
 
