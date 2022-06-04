@@ -2,10 +2,20 @@
 
 ## Unreleased
 
+## Changes
+- refactorings #3375
+
+## Fixes
+- do not reset our database if imported backup cannot be decrypted #3397
+
+
+## 1.85.0
+
 ### Changes
 - refactorings #3373 #3345 #3380 #3382
 - node: move split2 to devDependencies
 - python: build Python 3.10 wheels #3392
+- update Rust dependencies
 
 
 ### Fixes
