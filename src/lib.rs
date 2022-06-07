@@ -2,13 +2,15 @@
 
 #![forbid(unsafe_code)]
 #![deny(
+    unused,
     clippy::correctness,
     missing_debug_implementations,
     clippy::all,
     clippy::indexing_slicing,
     clippy::wildcard_imports,
     clippy::needless_borrow,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    clippy::unused_async
 )]
 #![allow(
     clippy::match_bool,
@@ -23,7 +25,6 @@ extern crate num_derive;
 extern crate smallvec;
 #[macro_use]
 extern crate rusqlite;
-extern crate strum;
 #[macro_use]
 extern crate strum_macros;
 
@@ -33,8 +34,6 @@ impl<T: rusqlite::ToSql + Send + Sync> ToSql for T {}
 
 #[macro_use]
 pub mod log;
-#[macro_use]
-pub mod error;
 
 #[cfg(feature = "internals")]
 #[macro_use]
