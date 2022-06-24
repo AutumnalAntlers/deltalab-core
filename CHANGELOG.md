@@ -3,10 +3,17 @@
 ## Unreleased
 
 ### Changes
+- limit the rate of MDN sending #3402
+- ignore ratelimits for bots #3439
+- remove `msgs_mdns` references to deleted messages during housekeeping #3387
+- format message lines starting with `>` as quotes #3434
 
 ### Fixes
 - set a default error if NDN does not provide an error
 - python: avoid exceptions when messages/contacts/chats are compared with `None`
+- node: wait for the event loop to stop before destroying contexts #3431
+- emit configuration errors via event on failure #3433
+- report configure and imex success/failure after freeing ongoing process #3442
 
 ### API-Changes
 - python: added `Message.get_status_updates()`  #3416

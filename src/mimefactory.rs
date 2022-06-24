@@ -3,6 +3,7 @@
 use std::convert::TryInto;
 
 use anyhow::{bail, ensure, Context as _, Result};
+use async_std::fs;
 use chrono::TimeZone;
 use lettre_email::{mime, Address, Header, MimeMultipartType, PartBuilder};
 
@@ -1079,10 +1080,15 @@ impl<'a> MimeFactory<'a> {
             }
         };
 
-        let quoted_text = self
+        let mut quoted_text = self
             .msg
             .quoted_text()
             .map(|quote| format_flowed_quote(&quote) + "\r\n\r\n");
+        if quoted_text.is_none() && final_text.starts_with('>') {
+            // Insert empty line to avoid receiver treating user-sent quote as topquote inserted by
+            // Delta Chat.
+            quoted_text = Some("\r\n".to_string());
+        }
         let flowed_text = format_flowed(final_text);
 
         let footer = &self.selfstatus;
@@ -1178,7 +1184,7 @@ impl<'a> MimeFactory<'a> {
 
         if self.attach_selfavatar {
             match context.get_config(Config::Selfavatar).await? {
-                Some(path) => match build_selfavatar_file(context, &path) {
+                Some(path) => match build_selfavatar_file(context, &path).await {
                     Ok(avatar) => headers.hidden.push(Header::new(
                         "Chat-User-Avatar".into(),
                         format!("base64:{}", avatar),
@@ -1361,7 +1367,7 @@ async fn build_body_file(
         maybe_encode_words(&filename_to_send)
     );
 
-    let body = std::fs::read(blob.to_abs_path())?;
+    let body = fs::read(blob.to_abs_path()).await?;
     let encoded_body = wrapped_base64_encode(&body);
 
     let mail = PartBuilder::new()
@@ -1373,9 +1379,9 @@ async fn build_body_file(
     Ok((mail, filename_to_send))
 }
 
-fn build_selfavatar_file(context: &Context, path: &str) -> Result<String> {
+async fn build_selfavatar_file(context: &Context, path: &str) -> Result<String> {
     let blob = BlobObject::from_path(context, path.as_ref())?;
-    let body = std::fs::read(blob.to_abs_path())?;
+    let body = fs::read(blob.to_abs_path()).await?;
     let encoded_body = wrapped_base64_encode(&body);
     Ok(encoded_body)
 }

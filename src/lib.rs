@@ -93,6 +93,7 @@ mod dehtml;
 mod color;
 pub mod html;
 pub mod plaintext;
+mod ratelimit;
 pub mod summary;
 
 pub mod dc_receive_imf;
@@ -102,9 +103,6 @@ pub mod accounts;
 
 /// if set imap/incoming and smtp/outgoing MIME messages will be printed
 pub const DCC_MIME_DEBUG: &str = "DCC_MIME_DEBUG";
-
-/// if set IMAP protocol commands and responses will be printed
-pub const DCC_IMAP_DEBUG: &str = "DCC_IMAP_DEBUG";
 
 #[cfg(test)]
 mod test_utils;

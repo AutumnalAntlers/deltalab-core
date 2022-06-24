@@ -348,7 +348,7 @@ NAPI_METHOD(dcn_start_event_handler) {
     callback,
     0,
     async_resource_name,
-    1,
+    1000, // max_queue_size
     1,
     NULL,
     NULL,
@@ -371,6 +371,11 @@ NAPI_METHOD(dcn_context_unref) {
 
   TRACE("Unrefing dc_context");
   dcn_context->gc = 1;
+  dc_stop_io(dcn_context->dc_context);
+  if (dcn_context->event_handler_thread != 0) {
+    uv_thread_join(&dcn_context->event_handler_thread);
+    dcn_context->event_handler_thread = 0;
+  }
   dc_context_unref(dcn_context->dc_context);
   dcn_context->dc_context = NULL;
 
@@ -2922,6 +2927,11 @@ NAPI_METHOD(dcn_accounts_unref) {
 
   TRACE("Unrefing dc_accounts");
   dcn_accounts->gc = 1;
+  dc_accounts_stop_io(dcn_accounts->dc_accounts);
+  if (dcn_accounts->event_handler_thread != 0) {
+    uv_thread_join(&dcn_accounts->event_handler_thread);
+    dcn_accounts->event_handler_thread = 0;
+  }
   dc_accounts_unref(dcn_accounts->dc_accounts);
   dcn_accounts->dc_accounts = NULL;
 
@@ -3093,8 +3103,8 @@ static void accounts_event_handler_thread_func(void* arg)
     }
     event = dc_accounts_get_next_event(dc_accounts_event_emitter);
     if (event == NULL) {
-      //TRACE("received NULL event, skipping");
-      continue;
+      TRACE("no more events");
+      break;
     }
 
     if (!dcn_accounts->threadsafe_event_handler) {
@@ -3216,7 +3226,7 @@ NAPI_METHOD(dcn_accounts_start_event_handler) {
     callback,
     0,
     async_resource_name,
-    1,
+    1000, // max_queue_size
     1,
     NULL,
     NULL,

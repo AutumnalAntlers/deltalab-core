@@ -11,7 +11,6 @@ use async_smtp::{smtp, EmailAddress, ServerAddress};
 use async_std::task;
 
 use crate::config::Config;
-use crate::constants::DC_LP_AUTH_OAUTH2;
 use crate::contact::{Contact, ContactId};
 use crate::events::EventType;
 use crate::login_param::{
@@ -103,7 +102,6 @@ impl Smtp {
             &lp.smtp,
             &lp.socks5_config,
             &lp.addr,
-            lp.server_flags & DC_LP_AUTH_OAUTH2 != 0,
             lp.provider
                 .map_or(lp.socks5_config.is_some(), |provider| provider.strict_tls),
         )
@@ -117,7 +115,6 @@ impl Smtp {
         lp: &ServerLoginParam,
         socks5_config: &Option<Socks5Config>,
         addr: &str,
-        oauth2: bool,
         provider_strict_tls: bool,
     ) -> Result<()> {
         if self.is_connected().await {
@@ -146,7 +143,7 @@ impl Smtp {
         let tls_config = dc_build_tls(strict_tls);
         let tls_parameters = ClientTlsParameters::new(domain.to_string(), tls_config);
 
-        let (creds, mechanism) = if oauth2 {
+        let (creds, mechanism) = if lp.oauth2 {
             // oauth2
             let send_pw = &lp.password;
             let access_token = dc_get_oauth2_access_token(context, addr, send_pw, false).await?;
@@ -479,12 +476,32 @@ pub(crate) async fn send_msg_to_smtp(
     }
 }
 
+/// Attempts to send queued MDNs.
+///
+/// Returns true if there are more MDNs to send, but rate limiter does not
+/// allow to send them. Returns false if there are no more MDNs to send.
+/// If sending an MDN fails, returns an error.
+async fn send_mdns(context: &Context, connection: &mut Smtp) -> Result<bool> {
+    loop {
+        if !context.ratelimit.read().await.can_send() {
+            info!(context, "Ratelimiter does not allow sending MDNs now");
+            return Ok(true);
+        }
+
+        let more_mdns = send_mdn(context, connection).await?;
+        if !more_mdns {
+            // No more MDNs to send.
+            return Ok(false);
+        }
+    }
+}
+
 /// Tries to send all messages currently in `smtp` and `smtp_mdns` tables.
 ///
 /// Logs and ignores SMTP errors to ensure that a single SMTP message constantly failing to be sent
 /// does not block other messages in the queue from being sent.
 ///
-/// Returns true if all messages were sent successfully, false otherwise.
+/// Returns true if sending was ratelimited, false otherwise. Errors are propagated to the caller.
 pub(crate) async fn send_smtp_messages(context: &Context, connection: &mut Smtp) -> Result<bool> {
     context.send_sync_msg().await?; // Add sync message to the end of the queue if needed.
     let rowids = context
@@ -503,28 +520,16 @@ pub(crate) async fn send_smtp_messages(context: &Context, connection: &mut Smtp)
             },
         )
         .await?;
-    let mut success = true;
     for rowid in rowids {
-        if let Err(err) = send_msg_to_smtp(context, connection, rowid).await {
-            info!(context, "Failed to send message over SMTP: {:#}.", err);
-            success = false;
-        }
+        send_msg_to_smtp(context, connection, rowid)
+            .await
+            .context("failed to send message")?;
     }
 
-    loop {
-        match send_mdn(context, connection).await {
-            Err(err) => {
-                info!(context, "Failed to send MDNs over SMTP: {:#}.", err);
-                success = false;
-                break;
-            }
-            Ok(false) => {
-                break;
-            }
-            Ok(true) => {}
-        }
-    }
-    Ok(success)
+    let ratelimited = send_mdns(context, connection)
+        .await
+        .context("failed to send MDNs")?;
+    Ok(ratelimited)
 }
 
 /// Tries to send MDN for message `msg_id` to `contact_id`.
