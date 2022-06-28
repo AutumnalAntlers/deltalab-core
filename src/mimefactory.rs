@@ -3,9 +3,9 @@
 use std::convert::TryInto;
 
 use anyhow::{bail, ensure, Context as _, Result};
-use async_std::fs;
 use chrono::TimeZone;
 use lettre_email::{mime, Address, Header, MimeMultipartType, PartBuilder};
+use tokio::fs;
 
 use crate::blob::BlobObject;
 use crate::chat::Chat;
@@ -1446,9 +1446,9 @@ fn maybe_encode_words(words: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use async_std::fs::File;
-    use async_std::prelude::*;
     use mailparse::{addrparse_header, MailHeaderMap};
+    use tokio::fs::File;
+    use tokio::io::AsyncWriteExt;
 
     use crate::chat::ChatId;
     use crate::chat::{
@@ -1551,7 +1551,7 @@ mod tests {
         assert_eq!(maybe_encode_words("äöü"), "=?utf-8?b?w6TDtsO8?=");
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_subject_from_mua() {
         // 1.: Receive a mail from an MUA
         assert_eq!(
@@ -1585,7 +1585,7 @@ mod tests {
         );
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_subject_from_dc() {
         // 2. Receive a message from Delta Chat
         assert_eq!(
@@ -1605,7 +1605,7 @@ mod tests {
         );
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_subject_outgoing() {
         // 3. Send the first message to a new contact
         let t = TestContext::new_alice().await;
@@ -1619,7 +1619,7 @@ mod tests {
         assert_eq!(first_subject_str(t).await, "Message from Alice");
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_subject_unicode() {
         // 4. Receive messages with unicode characters and make sure that we do not panic (we do not care about the result)
         msg_to_subject_str(
@@ -1651,7 +1651,7 @@ mod tests {
         .await;
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_subject_mdn() {
         // 5. Receive an mdn (read receipt) and make sure the mdn's subject is not used
         let t = TestContext::new_alice().await;
@@ -1701,7 +1701,7 @@ mod tests {
         assert_eq!("Re: Hello, Bob", mf.subject_str(&t).await.unwrap());
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_subject_in_group() -> Result<()> {
         async fn send_msg_get_subject(
             t: &TestContext,
@@ -1909,7 +1909,7 @@ mod tests {
         new_msg
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     // This test could still be extended
     async fn test_render_reply() {
         let t = TestContext::new_alice().await;
@@ -2003,7 +2003,7 @@ mod tests {
         assert!(!headers.lines().any(|l| l.trim().is_empty()));
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_selfavatar_unencrypted() -> anyhow::Result<()> {
         // create chat with bob, set selfavatar
         let t = TestContext::new_alice().await;
@@ -2060,7 +2060,7 @@ mod tests {
     }
 
     /// Test that removed member address does not go into the `To:` field.
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_remove_member_bcc() -> Result<()> {
         // Alice creates a group with Bob and Claire and then removes Bob.
         let alice = TestContext::new_alice().await;
@@ -2091,7 +2091,7 @@ mod tests {
     }
 
     /// Tests that standard IMF header "From:" comes before non-standard "Autocrypt:" header.
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_from_before_autocrypt() -> Result<()> {
         // create chat with bob
         let t = TestContext::new_alice().await;

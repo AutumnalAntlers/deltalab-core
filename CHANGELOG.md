@@ -3,15 +3,26 @@
 ## Unreleased
 
 ### Changes
+- switch from `async-std` to `tokio` as the async runtime #3449
+
+### Fixes
+
+
+## 1.87.0
+
+### Changes
 - limit the rate of MDN sending #3402
 - ignore ratelimits for bots #3439
 - remove `msgs_mdns` references to deleted messages during housekeeping #3387
 - format message lines starting with `>` as quotes #3434
+- node: remove `split2` dependency #3418
+- node: add git installation info to readme #3418
+- limit the rate of webxdc update sending #3417
 
 ### Fixes
 - set a default error if NDN does not provide an error
 - python: avoid exceptions when messages/contacts/chats are compared with `None`
-- node: wait for the event loop to stop before destroying contexts #3431
+- node: wait for the event loop to stop before destroying contexts #3431 #3451
 - emit configuration errors via event on failure #3433
 - report configure and imex success/failure after freeing ongoing process #3442
 
@@ -21,6 +32,7 @@
 - python: added `Message.is_webxdc()`  #3416
 - python: added `Message.is_videochat_invitation()`  #3416
 - python: added support for "videochat" and "webxdc" view types to `Message.new_empty()`  #3416
+
 
 ## 1.86.0
 

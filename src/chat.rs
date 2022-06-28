@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, ensure, Context as _, Result};
-use async_std::path::{Path, PathBuf};
 use deltachat_derive::{FromSql, ToSql};
 use serde::{Deserialize, Serialize};
 
@@ -3469,10 +3469,10 @@ mod tests {
     use crate::contact::Contact;
     use crate::dc_receive_imf::dc_receive_imf;
     use crate::test_utils::TestContext;
-    use async_std::fs::File;
-    use async_std::prelude::*;
+    use tokio::fs::File;
+    use tokio::io::AsyncWriteExt;
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_chat_info() {
         let t = TestContext::new().await;
         let chat = t.create_chat_with_contact("bob", "bob@example.com").await;
@@ -3503,7 +3503,7 @@ mod tests {
         assert_eq!(info, loaded);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_get_draft_no_draft() {
         let t = TestContext::new().await;
         let chat = t.get_self_chat().await;
@@ -3511,14 +3511,14 @@ mod tests {
         assert!(draft.is_none());
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_get_draft_special_chat_id() {
         let t = TestContext::new().await;
         let draft = DC_CHAT_ID_LAST_SPECIAL.get_draft(&t).await.unwrap();
         assert!(draft.is_none());
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_get_draft_no_chat() {
         // This is a weird case, maybe this should be an error but we
         // do not get this info from the database currently.
@@ -3527,7 +3527,7 @@ mod tests {
         assert!(draft.is_none());
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_get_draft() {
         let t = TestContext::new().await;
         let chat_id = &t.get_self_chat().await.id;
@@ -3541,7 +3541,7 @@ mod tests {
         assert_eq!(msg_text, draft_text);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_delete_draft() -> Result<()> {
         let t = TestContext::new_alice().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "abc").await?;
@@ -3562,7 +3562,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_forwarding_draft_failing() -> Result<()> {
         let t = TestContext::new_alice().await;
         let chat_id = &t.get_self_chat().await.id;
@@ -3576,7 +3576,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_draft_stable_ids() -> Result<()> {
         let t = TestContext::new_alice().await;
         let chat_id = &t.get_self_chat().await.id;
@@ -3621,7 +3621,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_change_quotes_on_reused_message_object() -> Result<()> {
         let t = TestContext::new_alice().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "chat").await?;
@@ -3673,7 +3673,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_add_contact_to_chat_ex_add_self() {
         // Adding self to a contact should succeed, even though it's pointless.
         let t = TestContext::new_alice().await;
@@ -3686,7 +3686,7 @@ mod tests {
         assert_eq!(added, false);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_modify_chat_multi_device() -> Result<()> {
         let a1 = TestContext::new_alice().await;
         let a2 = TestContext::new_alice().await;
@@ -3761,7 +3761,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_modify_chat_disordered() -> Result<()> {
         // Alice creates a group with Bob, Claire and Daisy and then removes Claire and Daisy
         // (sleep() is needed as otherwise smeared time from Alice looks to Bob like messages from the future which are all set to "now" then)
@@ -3775,47 +3775,47 @@ mod tests {
         send_text_msg(&alice, alice_chat_id, "populate".to_string()).await?;
 
         add_contact_to_chat(&alice, alice_chat_id, bob_id).await?;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         let add1 = alice.pop_sent_msg().await;
 
         add_contact_to_chat(&alice, alice_chat_id, claire_id).await?;
         let add2 = alice.pop_sent_msg().await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         add_contact_to_chat(&alice, alice_chat_id, daisy_id).await?;
         let add3 = alice.pop_sent_msg().await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         assert_eq!(get_chat_contacts(&alice, alice_chat_id).await?.len(), 4);
 
         remove_contact_from_chat(&alice, alice_chat_id, claire_id).await?;
         let remove1 = alice.pop_sent_msg().await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         remove_contact_from_chat(&alice, alice_chat_id, daisy_id).await?;
         let remove2 = alice.pop_sent_msg().await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         assert_eq!(get_chat_contacts(&alice, alice_chat_id).await?.len(), 2);
 
         // Bob receives the add and deletion messages out of order
         let bob = TestContext::new_bob().await;
         bob.recv_msg(&add1).await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         bob.recv_msg(&add3).await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         let bob_chat_id = bob.recv_msg(&add2).await.chat_id;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         assert_eq!(get_chat_contacts(&bob, bob_chat_id).await?.len(), 4);
 
         bob.recv_msg(&remove2).await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         bob.recv_msg(&remove1).await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         assert_eq!(get_chat_contacts(&bob, bob_chat_id).await?.len(), 2);
 
@@ -3823,7 +3823,7 @@ mod tests {
     }
 
     /// Test that group updates are robust to lost messages and eventual out of order arrival.
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_modify_chat_lost() -> Result<()> {
         let alice = TestContext::new_alice().await;
 
@@ -3838,11 +3838,11 @@ mod tests {
 
         send_text_msg(&alice, alice_chat_id, "populate".to_string()).await?;
         let add = alice.pop_sent_msg().await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         remove_contact_from_chat(&alice, alice_chat_id, claire_id).await?;
         let remove1 = alice.pop_sent_msg().await;
-        async_std::task::sleep(std::time::Duration::from_millis(1100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         remove_contact_from_chat(&alice, alice_chat_id, daisy_id).await?;
         let remove2 = alice.pop_sent_msg().await;
@@ -3865,7 +3865,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_leave_group() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let bob = TestContext::new_bob().await;
@@ -3894,7 +3894,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_add_remove_contact_for_single() {
         let ctx = TestContext::new_alice().await;
         let bob = Contact::create(&ctx, "", "bob@f.br").await.unwrap();
@@ -3918,7 +3918,7 @@ mod tests {
         assert_eq!(get_chat_contacts(&ctx, chat.id).await.unwrap().len(), 1);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_self_talk() -> Result<()> {
         let t = TestContext::new_alice().await;
         let chat = &t.get_self_chat().await;
@@ -3949,7 +3949,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_add_device_msg_unlabelled() {
         let t = TestContext::new().await;
 
@@ -3984,7 +3984,7 @@ mod tests {
         assert_eq!(msg2.chat_id.get_msg_cnt(&t).await.unwrap(), 2);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_add_device_msg_labelled() -> Result<()> {
         let t = TestContext::new().await;
 
@@ -4034,7 +4034,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_add_device_msg_label_only() {
         let t = TestContext::new().await;
         let res = add_device_msg(&t, Some(""), None).await;
@@ -4054,7 +4054,7 @@ mod tests {
         assert!(!msg_id.as_ref().unwrap().is_unset());
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_was_device_msg_ever_added() {
         let t = TestContext::new().await;
         add_device_msg(&t, Some("some-label"), None).await.ok();
@@ -4074,7 +4074,7 @@ mod tests {
         assert!(was_device_msg_ever_added(&t, "").await.is_err());
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_delete_device_chat() {
         let t = TestContext::new().await;
 
@@ -4094,7 +4094,7 @@ mod tests {
         assert_eq!(chatlist_len(&t, 0).await, 0)
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_device_chat_cannot_sent() {
         let t = TestContext::new().await;
         t.update_device_chats().await.unwrap();
@@ -4111,7 +4111,7 @@ mod tests {
         assert!(forward_msgs(&t, &[msg_id], device_chat_id).await.is_err());
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_delete_and_reset_all_device_msgs() {
         let t = TestContext::new().await;
         let mut msg = Message::new(Viewtype::Text);
@@ -4143,7 +4143,7 @@ mod tests {
             .len()
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_archive() {
         // create two chats
         let t = TestContext::new().await;
@@ -4246,7 +4246,7 @@ mod tests {
         assert_eq!(chatlist_len(&t, DC_GCL_ARCHIVED_ONLY).await, 1);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_unarchive_if_muted() -> Result<()> {
         let t = TestContext::new_alice().await;
 
@@ -4340,7 +4340,7 @@ mod tests {
         result
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_pinned() {
         let t = TestContext::new().await;
 
@@ -4352,9 +4352,9 @@ mod tests {
             .await
             .unwrap()
             .chat_id;
-        async_std::task::sleep(std::time::Duration::from_millis(1000)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         let chat_id2 = t.get_self_chat().await.id;
-        async_std::task::sleep(std::time::Duration::from_millis(1000)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         let chat_id3 = create_group_chat(&t, ProtectionStatus::Unprotected, "foo")
             .await
             .unwrap();
@@ -4397,7 +4397,7 @@ mod tests {
         assert_eq!(chatlist, vec![chat_id3, chat_id2, chat_id1]);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_set_chat_name() {
         let t = TestContext::new().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo")
@@ -4415,7 +4415,7 @@ mod tests {
         );
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_create_same_chat_twice() {
         let context = TestContext::new().await;
         let contact1 = Contact::create(&context.ctx, "bob", "bob@mail.de")
@@ -4438,7 +4438,7 @@ mod tests {
         assert_eq!(chat2.name, chat.name);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_shall_attach_selfavatar() -> Result<()> {
         let t = TestContext::new().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo").await?;
@@ -4456,7 +4456,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_set_mute_duration() {
         let t = TestContext::new().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo")
@@ -4507,7 +4507,7 @@ mod tests {
         );
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_add_info_msg() -> Result<()> {
         let t = TestContext::new().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo").await?;
@@ -4524,7 +4524,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_add_info_msg_with_cmd() -> Result<()> {
         let t = TestContext::new().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo").await?;
@@ -4554,7 +4554,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_set_protection() {
         let t = TestContext::new_alice().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo")
@@ -4622,7 +4622,7 @@ mod tests {
         assert_eq!(msg.get_state(), MessageState::OutDelivered); // as bcc-self is disabled and there is nobody else in the chat
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_lookup_by_contact_id() {
         let ctx = TestContext::new_alice().await;
 
@@ -4665,7 +4665,7 @@ mod tests {
         assert!(found.is_none());
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_lookup_self_by_contact_id() {
         let ctx = TestContext::new_alice().await;
 
@@ -4684,7 +4684,7 @@ mod tests {
         assert_eq!(chat.blocked, Blocked::Not);
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_group_with_removed_message_id() -> Result<()> {
         // Alice creates a group with Bob, sends a message to bob
         let alice = TestContext::new_alice().await;
@@ -4738,7 +4738,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_marknoticed_chat() -> Result<()> {
         let t = TestContext::new_alice().await;
         let chat = t.create_chat_with_contact("bob", "bob@example.org").await;
@@ -4783,7 +4783,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_contact_request_fresh_messages() -> Result<()> {
         let t = TestContext::new_alice().await;
 
@@ -4833,7 +4833,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_contact_request_archive() -> Result<()> {
         let t = TestContext::new_alice().await;
 
@@ -4873,7 +4873,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_classic_email_chat() -> Result<()> {
         let alice = TestContext::new_alice().await;
 
@@ -4918,7 +4918,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_chat_get_color() -> Result<()> {
         let t = TestContext::new().await;
         let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "a chat").await?;
@@ -4961,7 +4961,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_sticker_png() -> Result<()> {
         test_sticker(
             "sticker.png",
@@ -4972,7 +4972,7 @@ mod tests {
         .await
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_sticker_jpeg() -> Result<()> {
         test_sticker(
             "sticker.jpg",
@@ -4983,7 +4983,7 @@ mod tests {
         .await
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_sticker_gif() -> Result<()> {
         test_sticker(
             "sticker.gif",
@@ -4994,7 +4994,7 @@ mod tests {
         .await
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_sticker_forward() -> Result<()> {
         // create chats
         let alice = TestContext::new_alice().await;
@@ -5025,7 +5025,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_forward() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let bob = TestContext::new_bob().await;
@@ -5046,7 +5046,33 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_forward_info_msg() -> Result<()> {
+        let t = TestContext::new_alice().await;
+
+        let chat_id1 = create_group_chat(&t, ProtectionStatus::Unprotected, "a").await?;
+        send_text_msg(&t, chat_id1, "msg one".to_string()).await?;
+        let bob_id = Contact::create(&t, "", "bob@example.net").await?;
+        add_contact_to_chat(&t, chat_id1, bob_id).await?;
+        let msg1 = t.get_last_msg_in(chat_id1).await;
+        assert!(msg1.is_info());
+        assert!(msg1.get_text().unwrap().contains("bob@example.net"));
+
+        let chat_id2 = ChatId::create_for_contact(&t, bob_id).await?;
+        assert_eq!(get_chat_msgs(&t, chat_id2, 0).await?.len(), 0);
+        forward_msgs(&t, &[msg1.id], chat_id2).await?;
+        let msg2 = t.get_last_msg_in(chat_id2).await;
+        assert!(!msg2.is_info()); // forwarded info-messages lose their info-state
+        assert_eq!(msg2.get_info_type(), SystemMessage::Unknown);
+        assert_ne!(msg2.from_id, ContactId::INFO);
+        assert_ne!(msg2.to_id, ContactId::INFO);
+        assert_eq!(msg2.get_text().unwrap(), msg1.get_text().unwrap());
+        assert!(msg2.is_forwarded());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_forward_quote() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let bob = TestContext::new_bob().await;
@@ -5081,7 +5107,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_forward_group() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let bob = TestContext::new_bob().await;
@@ -5131,7 +5157,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_only_minimal_data_are_forwarded() -> Result<()> {
         // send a message from Alice to a group with Bob
         let alice = TestContext::new_alice().await;
@@ -5173,7 +5199,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_resend_own_message() -> Result<()> {
         // Alice creates group with Bob and sends an initial message
         let alice = TestContext::new_alice().await;
@@ -5226,7 +5252,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_resend_foreign_message_fails() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let alice_grp = create_group_chat(&alice, ProtectionStatus::Unprotected, "grp").await?;
@@ -5245,7 +5271,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_resend_opportunistically_encryption() -> Result<()> {
         // Alice creates group with Bob and sends an initial message
         let alice = TestContext::new_alice().await;
@@ -5282,7 +5308,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_resend_info_message_fails() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let alice_grp = create_group_chat(&alice, ProtectionStatus::Unprotected, "grp").await?;
@@ -5306,7 +5332,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_can_send_group() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let bob = Contact::create(&alice, "", "bob@f.br").await?;
@@ -5332,7 +5358,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_broadcast() -> Result<()> {
         // create two context, send two messages so both know the other
         let alice = TestContext::new_alice().await;
@@ -5375,7 +5401,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_create_for_contact_with_blocked() -> Result<()> {
         let t = TestContext::new().await;
         let (contact_id, _) =
@@ -5409,7 +5435,7 @@ mod tests {
         Ok(())
     }
 
-    #[async_std::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_chat_get_encryption_info() -> Result<()> {
         let alice = TestContext::new_alice().await;
         let bob = TestContext::new_bob().await;
