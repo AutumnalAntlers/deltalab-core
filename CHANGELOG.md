@@ -3,9 +3,21 @@
 ## Unreleased
 
 ### Changes
+- Implemented "Automatic e-mail address Porting" (AEAP). You can
+  configure a new address in DC now, and when receivers get messages
+  they will automatically recognize your moving to a new address. #3385
 - switch from `async-std` to `tokio` as the async runtime #3449
+- upgrade to `pgp@0.8.0` #3467
+- add IMAP ID extension support #3468
+- configure DeltaChat folder by selecting it, so it is configured even if not LISTed #3371
+- build PyPy wheels #6683
+- improve default error if NDN does not provide an error #3456
+- increase ratelimit from 3 to 6 messages per 60 seconds #3481
 
 ### Fixes
+- mailing list: remove square-brackets only for first name #3452
+- do not use footers from mailinglists as the contact status #3460
+- don't ignore KML parsing errors #3473
 
 
 ## 1.87.0
@@ -20,7 +32,7 @@
 - limit the rate of webxdc update sending #3417
 
 ### Fixes
-- set a default error if NDN does not provide an error
+- set a default error if NDN does not provide an error #3410
 - python: avoid exceptions when messages/contacts/chats are compared with `None`
 - node: wait for the event loop to stop before destroying contexts #3431 #3451
 - emit configuration errors via event on failure #3433

@@ -13,9 +13,8 @@ use once_cell::sync::Lazy;
 use crate::aheader::Aheader;
 use crate::blob::BlobObject;
 use crate::constants::{DC_DESIRED_TEXT_LEN, DC_ELLIPSIS};
-use crate::contact::{addr_normalize, ContactId};
+use crate::contact::{addr_cmp, addr_normalize, ContactId};
 use crate::context::Context;
-use crate::dc_tools::{dc_get_filemeta, dc_truncate, parse_receive_headers};
 use crate::dehtml::dehtml;
 use crate::e2ee;
 use crate::events::EventType;
@@ -29,6 +28,7 @@ use crate::peerstate::Peerstate;
 use crate::simplify::{simplify, SimplifiedText};
 use crate::stock_str;
 use crate::sync::SyncItems;
+use crate::tools::{get_filemeta, parse_receive_headers, truncate};
 
 /// A parsed MIME message.
 ///
@@ -47,6 +47,9 @@ pub struct MimeMessage {
     /// Addresses are normalized and lowercased:
     pub recipients: Vec<SingleInfo>,
     pub from: Vec<SingleInfo>,
+    /// Whether the From address was repeated in the signed part
+    /// (and we know that the signer intended to send from this address)
+    pub from_is_signed: bool,
     pub list_post: Option<String>,
     pub chat_disposition_notification_to: Option<SingleInfo>,
     pub decrypting_failed: bool,
@@ -216,67 +219,94 @@ impl MimeMessage {
         // Memory location for a possible decrypted message.
         let mut mail_raw = Vec::new();
         let mut gossiped_addr = Default::default();
+        let mut from_is_signed = false;
+        let mut decryption_info =
+            e2ee::create_decryption_info(context, &mail, message_time).await?;
 
+        // `signatures` is non-empty exactly if the message was encrypted and correctly signed.
         let (mail, signatures, warn_empty_signature) =
-            match e2ee::try_decrypt(context, &mail, message_time).await {
-                Ok((raw, signatures)) => {
-                    if let Some(raw) = raw {
-                        // Encrypted, but maybe unsigned message. Only if
-                        // `signatures` set is non-empty, it is a valid
-                        // autocrypt message.
+            match e2ee::try_decrypt(context, &mail, &decryption_info).await {
+                Ok(Some((raw, signatures))) => {
+                    // Encrypted, but maybe unsigned message. Only if
+                    // `signatures` set is non-empty, it is a valid
+                    // autocrypt message.
 
-                        mail_raw = raw;
-                        let decrypted_mail = mailparse::parse_mail(&mail_raw)?;
-                        if std::env::var(crate::DCC_MIME_DEBUG).is_ok() {
-                            info!(context, "decrypted message mime-body:");
-                            println!("{}", String::from_utf8_lossy(&mail_raw));
-                        }
-
-                        // Handle any gossip headers if the mail was encrypted.  See section
-                        // "3.6 Key Gossip" of <https://autocrypt.org/autocrypt-spec-1.1.0.pdf>
-                        // but only if the mail was correctly signed:
-                        if !signatures.is_empty() {
-                            let gossip_headers =
-                                decrypted_mail.headers.get_all_values("Autocrypt-Gossip");
-                            gossiped_addr = update_gossip_peerstates(
-                                context,
-                                message_time,
-                                &mail,
-                                gossip_headers,
-                            )
-                            .await?;
-                        }
-
-                        // let known protected headers from the decrypted
-                        // part override the unencrypted top-level
-
-                        // Signature was checked for original From, so we
-                        // do not allow overriding it.
-                        let mut throwaway_from = from.clone();
-
-                        // We do not want to allow unencrypted subject in encrypted emails because the user might falsely think that the subject is safe.
-                        // See <https://github.com/deltachat/deltachat-core-rust/issues/1790>.
-                        headers.remove("subject");
-
-                        MimeMessage::merge_headers(
-                            context,
-                            &mut headers,
-                            &mut recipients,
-                            &mut throwaway_from,
-                            &mut list_post,
-                            &mut chat_disposition_notification_to,
-                            &decrypted_mail.headers,
-                        );
-
-                        (Ok(decrypted_mail), signatures, true)
-                    } else {
-                        // Message was not encrypted
-                        (Ok(mail), signatures, false)
+                    mail_raw = raw;
+                    let decrypted_mail = mailparse::parse_mail(&mail_raw)?;
+                    if std::env::var(crate::DCC_MIME_DEBUG).is_ok() {
+                        info!(context, "decrypted message mime-body:");
+                        println!("{}", String::from_utf8_lossy(&mail_raw));
                     }
+
+                    // Handle any gossip headers if the mail was encrypted.  See section
+                    // "3.6 Key Gossip" of <https://autocrypt.org/autocrypt-spec-1.1.0.pdf>
+                    // but only if the mail was correctly signed:
+                    if !signatures.is_empty() {
+                        let gossip_headers =
+                            decrypted_mail.headers.get_all_values("Autocrypt-Gossip");
+                        gossiped_addr =
+                            update_gossip_peerstates(context, message_time, &mail, gossip_headers)
+                                .await?;
+                    }
+
+                    // let known protected headers from the decrypted
+                    // part override the unencrypted top-level
+
+                    // Signature was checked for original From, so we
+                    // do not allow overriding it.
+                    let mut signed_from = Vec::new();
+
+                    // We do not want to allow unencrypted subject in encrypted emails because the user might falsely think that the subject is safe.
+                    // See <https://github.com/deltachat/deltachat-core-rust/issues/1790>.
+                    headers.remove("subject");
+
+                    MimeMessage::merge_headers(
+                        context,
+                        &mut headers,
+                        &mut recipients,
+                        &mut signed_from,
+                        &mut list_post,
+                        &mut chat_disposition_notification_to,
+                        &decrypted_mail.headers,
+                    );
+                    if let Some(signed_from) = signed_from.first() {
+                        if let Some(from) = from.first() {
+                            if addr_cmp(&signed_from.addr, &from.addr) {
+                                from_is_signed = true;
+                            } else {
+                                // There is a From: header in the encrypted &
+                                // signed part, but it doesn't match the outer one.
+                                // This _might_ be because the sender's mail server
+                                // replaced the sending address, e.g. in a mailing list.
+                                // Or it's because someone is doing some replay attack
+                                // - OTOH, I can't come up with an attack scenario
+                                // where this would be useful.
+                                warn!(
+                                    context,
+                                    "From header in signed part does't match the outer one"
+                                );
+                            }
+                        }
+                    }
+
+                    (Ok(decrypted_mail), signatures, true)
+                }
+                Ok(None) => {
+                    // Message was not encrypted.
+                    // If it is not a read receipt, degrade encryption.
+                    if let Some(peerstate) = &mut decryption_info.peerstate {
+                        if message_time > peerstate.last_seen_autocrypt
+                            && mail.ctype.mimetype != "multipart/report"
+                        {
+                            peerstate.degrade_encryption(message_time);
+                            peerstate.save_to_db(&context.sql, false).await?;
+                        }
+                    }
+                    (Ok(mail), HashSet::new(), false)
                 }
                 Err(err) => {
                     warn!(context, "decryption failed: {}", err);
-                    (Err(err), Default::default(), true)
+                    (Err(err), HashSet::new(), true)
                 }
             };
 
@@ -286,6 +316,7 @@ impl MimeMessage {
             recipients,
             list_post,
             from,
+            from_is_signed,
             chat_disposition_notification_to,
             decrypting_failed: mail.is_err(),
 
@@ -347,6 +378,13 @@ impl MimeMessage {
 
         if parser.is_mime_modified {
             parser.decoded_data = mail_raw;
+        }
+
+        crate::peerstate::maybe_do_aeap_transition(context, &mut decryption_info, &parser).await?;
+        if let Some(peerstate) = decryption_info.peerstate {
+            peerstate
+                .handle_fingerprint_change(context, message_time)
+                .await?;
         }
 
         Ok(parser)
@@ -977,7 +1015,7 @@ impl MimeMessage {
                             > DC_DESIRED_TEXT_LEN + DC_ELLIPSIS.len()
                         {
                             self.is_mime_modified = true;
-                            dc_truncate(&*simplified_txt, DC_DESIRED_TEXT_LEN).to_string()
+                            truncate(&*simplified_txt, DC_DESIRED_TEXT_LEN).to_string()
                         } else {
                             simplified_txt
                         };
@@ -1036,7 +1074,7 @@ impl MimeMessage {
             // XXX what if somebody sends eg an "location-highlights.kml"
             // attachment unrelated to location streaming?
             if filename.starts_with("location") || filename.starts_with("message") {
-                let parsed = location::Kml::parse(context, decoded_data)
+                let parsed = location::Kml::parse(decoded_data)
                     .map_err(|err| {
                         warn!(context, "failed to parse kml part: {}", err);
                     })
@@ -1088,7 +1126,7 @@ impl MimeMessage {
         /* create and register Mime part referencing the new Blob object */
         let mut part = Part::default();
         if mime_type.type_() == mime::IMAGE {
-            if let Ok((width, height)) = dc_get_filemeta(decoded_data) {
+            if let Ok((width, height)) = get_filemeta(decoded_data) {
                 part.param.set_int(Param::Width, width as i32);
                 part.param.set_int(Param::Height, height as i32);
             }
@@ -1335,7 +1373,7 @@ impl MimeMessage {
 
     /// Some providers like GMX and Yahoo do not send standard NDNs (Non Delivery notifications).
     /// If you improve heuristics here you might also have to change prefetch_should_download() in imap/mod.rs.
-    /// Also you should add a test in dc_receive_imf.rs (there already are lots of test_parse_ndn_* tests).
+    /// Also you should add a test in receive_imf.rs (there already are lots of test_parse_ndn_* tests).
     #[allow(clippy::indexing_slicing)]
     async fn heuristically_parse_ndn(&mut self, context: &Context) {
         let maybe_ndn = if let Some(from) = self.get_header(HeaderDef::From_) {
@@ -1399,11 +1437,11 @@ impl MimeMessage {
         }
 
         if let Some(failure_report) = &self.failure_report {
-            let error = parts.iter().find(|p| p.typ == Viewtype::Text).map_or_else(
-                || "Non-Delivery-Notification without further details.".to_string(),
-                |p| p.msg.clone(),
-            );
-            if let Err(e) = message::handle_ndn(context, failure_report, &error).await {
+            let error = parts
+                .iter()
+                .find(|p| p.typ == Viewtype::Text)
+                .map(|p| p.msg.clone());
+            if let Err(e) = message::handle_ndn(context, failure_report, error).await {
                 warn!(context, "Could not handle ndn: {}", e);
             }
         }
@@ -1730,8 +1768,8 @@ mod tests {
         chatlist::Chatlist,
         config::Config,
         constants::Blocked,
-        dc_receive_imf::dc_receive_imf,
         message::{Message, MessageState, MessengerMessage},
+        receive_imf::receive_imf,
         test_utils::TestContext,
     };
     use mailparse::ParsedMail;
@@ -1804,7 +1842,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_dc_mimeparser_crash() {
+    async fn test_mimeparser_crash() {
         let context = TestContext::new().await;
         let raw = include_bytes!("../test-data/message/issue_523.txt");
         let mimeparser = MimeMessage::from_bytes(&context.ctx, &raw[..])
@@ -2904,7 +2942,7 @@ On 2020-10-25, Bob wrote:
     async fn test_add_subj_to_multimedia_msg() {
         let t = TestContext::new_alice().await;
         t.set_config(Config::ShowEmails, Some("2")).await.unwrap();
-        dc_receive_imf(
+        receive_imf(
             &t.ctx,
             include_bytes!("../test-data/message/subj_with_multimedia_msg.eml"),
             false,
@@ -3055,7 +3093,7 @@ Subject: ...
 
 Some quote.
 "###;
-        dc_receive_imf(&t, raw, false).await?;
+        receive_imf(&t, raw, false).await?;
 
         // Delta Chat generates In-Reply-To with a starting tab when Message-ID is too long.
         let raw = br###"In-Reply-To:
@@ -3072,7 +3110,7 @@ Subject: ...
 Some reply
 "###;
 
-        dc_receive_imf(&t, raw, false).await?;
+        receive_imf(&t, raw, false).await?;
 
         let msg = t.get_last_msg().await;
         assert_eq!(msg.get_text().unwrap(), "Some reply");
@@ -3100,13 +3138,13 @@ Message.
 "###;
 
         // Bob receives message.
-        dc_receive_imf(&bob, raw, false).await?;
+        receive_imf(&bob, raw, false).await?;
         let msg = bob.get_last_msg().await;
         // Message is incoming.
         assert!(msg.param.get_bool(Param::WantsMdn).unwrap());
 
         // Alice receives copy-to-self.
-        dc_receive_imf(&alice, raw, false).await?;
+        receive_imf(&alice, raw, false).await?;
         let msg = alice.get_last_msg().await;
         // Message is outgoing, don't send read receipt to self.
         assert!(msg.param.get_bool(Param::WantsMdn).is_none());
@@ -3119,7 +3157,7 @@ Message.
         let alice = TestContext::new_alice().await;
 
         // Alice receives BCC-self copy of a message sent to Bob.
-        dc_receive_imf(
+        receive_imf(
             &alice,
             "Received: (Postfix, from userid 1000); Mon, 4 Dec 2006 14:51:39 +0100 (CET)\n\
                  From: alice@example.org\n\
@@ -3140,7 +3178,7 @@ Message.
 
         // Due to a bug in the old version running on the other device, Alice receives a read
         // receipt from self.
-        dc_receive_imf(
+        receive_imf(
             &alice,
                 "Received: (Postfix, from userid 1000); Mon, 4 Dec 2006 14:51:39 +0100 (CET)\n\
                  From: alice@example.org\n\
@@ -3191,7 +3229,7 @@ Message.
 
         let original =
             include_bytes!("../test-data/message/ms_exchange_report_original_message.eml");
-        dc_receive_imf(&t, original, false).await?;
+        receive_imf(&t, original, false).await?;
         let original_msg_id = t.get_last_msg().await.id;
 
         // 1. Test mimeparser directly
@@ -3206,7 +3244,7 @@ Message.
         assert!(mimeparser.mdn_reports[0].additional_message_ids.is_empty());
 
         // 2. Test that marking the original msg as read works
-        dc_receive_imf(&t, mdn, false).await?;
+        receive_imf(&t, mdn, false).await?;
 
         assert_eq!(
             original_msg_id.get_state(&t).await?,

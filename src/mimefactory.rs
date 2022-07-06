@@ -13,11 +13,6 @@ use crate::config::Config;
 use crate::constants::{Chattype, DC_FROM_HANDSHAKE};
 use crate::contact::Contact;
 use crate::context::{get_version_str, Context};
-use crate::dc_tools::IsNoneOrEmpty;
-use crate::dc_tools::{
-    dc_create_outgoing_rfc724_mid, dc_create_smeared_timestamp, dc_get_filebytes,
-    remove_subject_prefix, time,
-};
 use crate::e2ee::EncryptHelper;
 use crate::ephemeral::Timer as EphemeralTimer;
 use crate::format_flowed::{format_flowed, format_flowed_quote};
@@ -29,6 +24,11 @@ use crate::param::Param;
 use crate::peerstate::{Peerstate, PeerstateVerifiedStatus};
 use crate::simplify::escape_message_footer_marks;
 use crate::stock_str;
+use crate::tools::IsNoneOrEmpty;
+use crate::tools::{
+    create_outgoing_rfc724_mid, create_smeared_timestamp, get_filebytes, remove_subject_prefix,
+    time,
+};
 
 // attachments of 25 mb brutto should work on the majority of providers
 // (brutto examples: web.de=50, 1&1=40, t-online.de=32, gmail=25, posteo=50, yahoo=25, all-inkl=100).
@@ -243,7 +243,7 @@ impl<'a> MimeFactory<'a> {
             .get_config(Config::Selfstatus)
             .await?
             .unwrap_or_default();
-        let timestamp = dc_create_smeared_timestamp(context).await;
+        let timestamp = create_smeared_timestamp(context).await;
 
         let res = MimeFactory::<'a> {
             from_addr,
@@ -489,9 +489,9 @@ impl<'a> MimeFactory<'a> {
 
         // Start with Internet Message Format headers in the order of the standard example
         // <https://datatracker.ietf.org/doc/html/rfc5322#appendix-A.1.1>.
-        headers
-            .unprotected
-            .push(Header::new_with_value("From".into(), vec![from]).unwrap());
+        let from_header = Header::new_with_value("From".into(), vec![from]).unwrap();
+        headers.unprotected.push(from_header.clone());
+
         if let Some(sender_displayname) = &self.sender_displayname {
             let sender =
                 Address::new_mailbox_with_name(sender_displayname.clone(), self.from_addr.clone());
@@ -528,7 +528,7 @@ impl<'a> MimeFactory<'a> {
 
         let rfc724_mid = match self.loaded {
             Loaded::Message { .. } => self.msg.rfc724_mid.clone(),
-            Loaded::Mdn { .. } => dc_create_outgoing_rfc724_mid(None, &self.from_addr),
+            Loaded::Mdn { .. } => create_outgoing_rfc724_mid(None, &self.from_addr),
         };
         let rfc724_mid_headervalue = render_rfc724_mid(&rfc724_mid);
 
@@ -661,6 +661,8 @@ impl<'a> MimeFactory<'a> {
         };
 
         let outer_message = if is_encrypted {
+            headers.protected.push(from_header);
+
             // Store protected headers in the inner message.
             let message = headers
                 .protected
@@ -1396,7 +1398,7 @@ fn recipients_contain_addr(recipients: &[(String, String)], addr: &str) -> bool 
 async fn is_file_size_okay(context: &Context, msg: &Message) -> Result<bool> {
     match msg.param.get_path(Param::File, context)? {
         Some(path) => {
-            let bytes = dc_get_filebytes(context, &path).await;
+            let bytes = get_filebytes(context, &path).await;
             Ok(bytes <= UPPER_LIMIT_FILE_SIZE)
         }
         None => Ok(false),
@@ -1447,8 +1449,6 @@ fn maybe_encode_words(words: &str) -> String {
 #[cfg(test)]
 mod tests {
     use mailparse::{addrparse_header, MailHeaderMap};
-    use tokio::fs::File;
-    use tokio::io::AsyncWriteExt;
 
     use crate::chat::ChatId;
     use crate::chat::{
@@ -1457,8 +1457,8 @@ mod tests {
     };
     use crate::chatlist::Chatlist;
     use crate::contact::Origin;
-    use crate::dc_receive_imf::dc_receive_imf;
     use crate::mimeparser::MimeMessage;
+    use crate::receive_imf::receive_imf;
     use crate::test_utils::{get_chat_msg, TestContext};
 
     use super::*;
@@ -1655,7 +1655,7 @@ mod tests {
     async fn test_subject_mdn() {
         // 5. Receive an mdn (read receipt) and make sure the mdn's subject is not used
         let t = TestContext::new_alice().await;
-        dc_receive_imf(
+        receive_imf(
             &t,
             b"Received: (Postfix, from userid 1000); Mon, 4 Dec 2006 14:51:39 +0100 (CET)\n\
             From: alice@example.org\n\
@@ -1743,7 +1743,7 @@ mod tests {
         let subject = send_msg_get_subject(&t, group_id, None).await?;
         assert_eq!(subject, "Re: groupname");
 
-        dc_receive_imf(
+        receive_imf(
             &t,
             format!(
                 "Received: (Postfix, from userid 1000); Mon, 4 Dec 2006 14:51:39 +0100 (CET)\n\
@@ -1858,7 +1858,7 @@ mod tests {
         }
 
         if message_arrives_inbetween {
-            dc_receive_imf(
+            receive_imf(
                 &t,
                 b"Received: (Postfix, from userid 1000); Mon, 4 Dec 2006 14:51:39 +0100 (CET)\n\
                     From: Bob <bob@example.com>\n\
@@ -1892,7 +1892,7 @@ mod tests {
             .await
             .unwrap();
 
-        dc_receive_imf(context, imf_raw, false).await.unwrap();
+        receive_imf(context, imf_raw, false).await.unwrap();
 
         let chats = Chatlist::try_load(context, 0, None, None).await.unwrap();
 
@@ -2011,7 +2011,7 @@ mod tests {
 
         let file = t.dir.path().join("avatar.png");
         let bytes = include_bytes!("../test-data/image/avatar64x64.png");
-        File::create(&file).await?.write_all(bytes).await?;
+        tokio::fs::write(&file, bytes).await?;
         t.set_config(Config::Selfavatar, Some(file.to_str().unwrap()))
             .await?;
 

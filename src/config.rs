@@ -8,10 +8,10 @@ use crate::blob::BlobObject;
 use crate::constants::DC_VERSION_STR;
 use crate::contact::addr_cmp;
 use crate::context::Context;
-use crate::dc_tools::{dc_get_abs_path, improve_single_line_input, EmailAddress};
 use crate::events::EventType;
 use crate::mimefactory::RECOMMENDED_FILE_SIZE;
 use crate::provider::{get_provider_by_id, Provider};
+use crate::tools::{get_abs_path, improve_single_line_input, EmailAddress};
 
 /// The available configuration keys.
 #[derive(
@@ -200,7 +200,7 @@ impl Context {
         let value = match key {
             Config::Selfavatar => {
                 let rel_path = self.sql.get_raw_config(key).await?;
-                rel_path.map(|p| dc_get_abs_path(self, &p).to_string_lossy().into_owned())
+                rel_path.map(|p| get_abs_path(self, &p).to_string_lossy().into_owned())
             }
             Config::SysVersion => Some((&*DC_VERSION_STR).clone()),
             Config::SysMsgsizeMaxRecommended => Some(format!("{}", RECOMMENDED_FILE_SIZE)),
@@ -441,9 +441,8 @@ mod tests {
     use std::string::ToString;
 
     use crate::constants;
-    use crate::dc_receive_imf::dc_receive_imf;
     use crate::test_utils::TestContext;
-    use crate::test_utils::TestContextManager;
+
     use num_traits::FromPrimitive;
 
     #[test]
@@ -558,70 +557,6 @@ mod tests {
         assert!(alice.is_self_addr("alice@example.org").await?);
         assert!(alice.is_self_addr("alice@alice.com").await?);
         assert!(alice.is_self_addr("Alice@alice.xyz").await?);
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_change_primary_self_addr() -> Result<()> {
-        let mut tcm = TestContextManager::new().await;
-        let alice = tcm.alice().await;
-        let bob = tcm.bob().await;
-
-        // Alice sends a message to Bob
-        let alice_bob_chat = alice.create_chat(&bob).await;
-        let sent = alice.send_text(alice_bob_chat.id, "Hi").await;
-        let bob_msg = bob.recv_msg(&sent).await;
-        bob_msg.chat_id.accept(&bob).await?;
-        assert_eq!(bob_msg.text.unwrap(), "Hi");
-
-        // Alice changes her self address and reconfigures
-        // (ensure_secret_key_exists() is called during configure)
-        alice
-            .set_primary_self_addr("alice@someotherdomain.xyz")
-            .await?;
-        crate::e2ee::ensure_secret_key_exists(&alice).await?;
-
-        assert_eq!(
-            alice.get_primary_self_addr().await?,
-            "alice@someotherdomain.xyz"
-        );
-
-        // Bob sends a message to Alice, encrypting to her previous key
-        let sent = bob.send_text(bob_msg.chat_id, "hi back").await;
-
-        // Alice set up message forwarding so that she still receives
-        // the message with her new address
-        let alice_msg = alice.recv_msg(&sent).await;
-        assert_eq!(alice_msg.text, Some("hi back".to_string()));
-        assert_eq!(alice_msg.get_showpadlock(), true);
-        assert_eq!(alice_msg.chat_id, alice_bob_chat.id);
-
-        // Even if Bob sends a message to Alice without In-Reply-To,
-        // it's still assigned to the 1:1 chat with Bob and not to
-        // a group (without secondary addresses, an ad-hoc group
-        // would be created)
-        dc_receive_imf(
-            &alice,
-            b"From: bob@example.net
-To: alice@example.org
-Chat-Version: 1.0
-Message-ID: <456@example.com>
-
-Message w/out In-Reply-To
-",
-            false,
-        )
-        .await?;
-
-        let alice_msg = alice.get_last_msg().await;
-
-        assert_eq!(
-            alice_msg.text,
-            Some("Message w/out In-Reply-To".to_string())
-        );
-        assert_eq!(alice_msg.get_showpadlock(), false);
-        assert_eq!(alice_msg.chat_id, alice_bob_chat.id);
 
         Ok(())
     }

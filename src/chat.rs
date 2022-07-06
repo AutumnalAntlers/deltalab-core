@@ -20,12 +20,6 @@ use crate::constants::{
 };
 use crate::contact::{Contact, ContactId, Origin, VerifiedStatus};
 use crate::context::Context;
-use crate::dc_receive_imf::ReceivedMsg;
-use crate::dc_tools::{
-    dc_create_id, dc_create_outgoing_rfc724_mid, dc_create_smeared_timestamp,
-    dc_create_smeared_timestamps, dc_get_abs_path, dc_gm2local_offset, improve_single_line_input,
-    time, IsNoneOrEmpty,
-};
 use crate::ephemeral::Timer as EphemeralTimer;
 use crate::events::EventType;
 use crate::html::new_html_mimepart;
@@ -34,9 +28,14 @@ use crate::mimefactory::MimeFactory;
 use crate::mimeparser::SystemMessage;
 use crate::param::{Param, Params};
 use crate::peerstate::{Peerstate, PeerstateVerifiedStatus};
+use crate::receive_imf::ReceivedMsg;
 use crate::scheduler::InterruptInfo;
 use crate::smtp::send_msg_to_smtp;
 use crate::stock_str;
+use crate::tools::{
+    create_id, create_outgoing_rfc724_mid, create_smeared_timestamp, create_smeared_timestamps,
+    get_abs_path, gm2local_offset, improve_single_line_input, time, IsNoneOrEmpty,
+};
 use crate::webxdc::WEBXDC_SUFFIX;
 use crate::{location, sql};
 
@@ -233,7 +232,7 @@ impl ChatId {
                     grpname,
                     grpid,
                     create_blocked,
-                    dc_create_smeared_timestamp(context).await,
+                    create_smeared_timestamp(context).await,
                     create_protected,
                     param.unwrap_or_default(),
 		    if chattype == Chattype::Group || chattype == Chattype::Mailinglist {
@@ -440,7 +439,7 @@ impl ChatId {
                 self,
                 &msg_text,
                 cmd,
-                dc_create_smeared_timestamp(context).await,
+                create_smeared_timestamp(context).await,
                 None,
                 None,
                 None,
@@ -1139,7 +1138,7 @@ impl Chat {
     pub async fn get_profile_image(&self, context: &Context) -> Result<Option<PathBuf>> {
         if let Some(image_rel) = self.param.get(Param::ProfileImage) {
             if !image_rel.is_empty() {
-                return Ok(Some(dc_get_abs_path(context, image_rel)));
+                return Ok(Some(get_abs_path(context, image_rel)));
             }
         } else if self.typ == Chattype::Single {
             let contacts = get_chat_contacts(context, self.id).await?;
@@ -1150,7 +1149,7 @@ impl Chat {
             }
         } else if self.typ == Chattype::Broadcast {
             if let Ok(image_rel) = get_broadcast_icon(context).await {
-                return Ok(Some(dc_get_abs_path(context, image_rel)));
+                return Ok(Some(get_abs_path(context, image_rel)));
             }
         }
         Ok(None)
@@ -1276,7 +1275,7 @@ impl Chat {
                 Chattype::Group => Some(self.grpid.as_str()),
                 _ => None,
             };
-            dc_create_outgoing_rfc724_mid(grpid, &from)
+            create_outgoing_rfc724_mid(grpid, &from)
         };
 
         if self.typ == Chattype::Single {
@@ -1753,7 +1752,7 @@ impl ChatIdBlocked {
             _ => (),
         }
 
-        let created_timestamp = dc_create_smeared_timestamp(context).await;
+        let created_timestamp = create_smeared_timestamp(context).await;
         let chat_id = context
             .sql
             .transaction(move |transaction| {
@@ -1906,7 +1905,7 @@ async fn prepare_msg_common(
             context,
             msg,
             update_msg_id,
-            dc_create_smeared_timestamp(context).await,
+            create_smeared_timestamp(context).await,
         )
         .await?;
     msg.chat_id = chat_id;
@@ -2000,7 +1999,7 @@ async fn prepare_send_msg(
     chat_id: ChatId,
     msg: &mut Message,
 ) -> Result<Option<i64>> {
-    // dc_prepare_msg() leaves the message state to OutPreparing, we
+    // prepare_msg() leaves the message state to OutPreparing, we
     // only have to change the state to OutPending in this case.
     // Otherwise we still have to prepare the message, which will set
     // the state to OutPending.
@@ -2184,7 +2183,7 @@ pub async fn send_videochat_invitation(context: &Context, chat_id: ChatId) -> Re
         bail!("webrtc_instance not set");
     };
 
-    let instance = Message::create_webrtc_instance(&instance, &dc_create_id());
+    let instance = Message::create_webrtc_instance(&instance, &create_id());
 
     let mut msg = Message::new(Viewtype::VideochatInvitation);
     msg.param.set(Param::WebrtcRoom, &instance);
@@ -2247,7 +2246,7 @@ pub async fn get_chat_msgs(
 
         let mut ret = Vec::new();
         let mut last_day = 0;
-        let cnv_to_local = dc_gm2local_offset();
+        let cnv_to_local = gm2local_offset();
 
         for (ts, curr_id) in sorted_rows {
             if (flags & DC_GCM_ADDDAYMARKER) != 0 {
@@ -2543,7 +2542,7 @@ pub async fn create_group_chat(
     let chat_name = improve_single_line_input(chat_name);
     ensure!(!chat_name.is_empty(), "Invalid chat name");
 
-    let grpid = dc_create_id();
+    let grpid = create_id();
 
     let row_id = context
         .sql
@@ -2555,7 +2554,7 @@ pub async fn create_group_chat(
                 Chattype::Group,
                 chat_name,
                 grpid,
-                dc_create_smeared_timestamp(context).await,
+                create_smeared_timestamp(context).await,
             ],
         )
         .await?;
@@ -2602,7 +2601,7 @@ async fn find_unused_broadcast_list_name(context: &Context) -> Result<String> {
 /// Creates a new broadcast list.
 pub async fn create_broadcast_list(context: &Context) -> Result<ChatId> {
     let chat_name = find_unused_broadcast_list_name(context).await?;
-    let grpid = dc_create_id();
+    let grpid = create_id();
     let row_id = context
         .sql
         .insert(
@@ -2613,7 +2612,7 @@ pub async fn create_broadcast_list(context: &Context) -> Result<ChatId> {
                 Chattype::Broadcast,
                 chat_name,
                 grpid,
-                dc_create_smeared_timestamp(context).await,
+                create_smeared_timestamp(context).await,
             ],
         )
         .await?;
@@ -3054,7 +3053,7 @@ pub async fn forward_msgs(context: &Context, msg_ids: &[MsgId], chat_id: ChatId)
     chat_id.unarchive_if_not_muted(context).await?;
     if let Ok(mut chat) = Chat::load_from_db(context, chat_id).await {
         ensure!(chat.can_send(context).await?, "cannot send to {}", chat_id);
-        curr_timestamp = dc_create_smeared_timestamps(context, msg_ids.len()).await;
+        curr_timestamp = create_smeared_timestamps(context, msg_ids.len()).await;
         let ids = context
             .sql
             .query_map(
@@ -3249,12 +3248,12 @@ pub async fn add_device_msg_with_importance(
     if let Some(msg) = msg {
         chat_id = ChatId::get_for_contact(context, ContactId::DEVICE).await?;
 
-        let rfc724_mid = dc_create_outgoing_rfc724_mid(None, "@device");
+        let rfc724_mid = create_outgoing_rfc724_mid(None, "@device");
         msg.try_calc_and_set_dimensions(context).await.ok();
         prepare_msg_blob(context, msg).await?;
         chat_id.unarchive_if_not_muted(context).await?;
 
-        let timestamp_sent = dc_create_smeared_timestamp(context).await;
+        let timestamp_sent = create_smeared_timestamp(context).await;
 
         // makes sure, the added message is the last one,
         // even if the date is wrong (useful esp. when warning about bad dates)
@@ -3387,7 +3386,7 @@ pub(crate) async fn add_info_msg_with_cmd(
     parent: Option<&Message>,
     from_id: Option<ContactId>,
 ) -> Result<MsgId> {
-    let rfc724_mid = dc_create_outgoing_rfc724_mid(None, "@device");
+    let rfc724_mid = create_outgoing_rfc724_mid(None, "@device");
     let ephemeral_timer = chat_id.get_ephemeral_timer(context).await?;
 
     let mut param = Params::new();
@@ -3464,13 +3463,11 @@ pub(crate) async fn update_msg_text_and_timestamp(
 mod tests {
     use super::*;
 
-    use crate::chatlist::{dc_get_archived_cnt, Chatlist};
+    use crate::chatlist::{get_archived_cnt, Chatlist};
     use crate::constants::{DC_GCL_ARCHIVED_ONLY, DC_GCL_NO_SPECIALS};
     use crate::contact::Contact;
-    use crate::dc_receive_imf::dc_receive_imf;
+    use crate::receive_imf::receive_imf;
     use crate::test_utils::TestContext;
-    use tokio::fs::File;
-    use tokio::io::AsyncWriteExt;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_chat_info() {
@@ -4251,7 +4248,7 @@ mod tests {
         let t = TestContext::new_alice().await;
 
         async fn msg_from_bob(t: &TestContext, num: u32) -> Result<()> {
-            dc_receive_imf(
+            receive_imf(
                 t,
                 format!(
                     "From: bob@example.net\n\
@@ -4274,17 +4271,17 @@ mod tests {
         let chat_id = t.get_last_msg().await.get_chat_id();
         chat_id.accept(&t).await?;
         chat_id.set_visibility(&t, ChatVisibility::Archived).await?;
-        assert_eq!(dc_get_archived_cnt(&t).await?, 1);
+        assert_eq!(get_archived_cnt(&t).await?, 1);
 
         // not muted chat is unarchived on receiving a message
         msg_from_bob(&t, 2).await?;
-        assert_eq!(dc_get_archived_cnt(&t).await?, 0);
+        assert_eq!(get_archived_cnt(&t).await?, 0);
 
         // forever muted chat is not unarchived on receiving a message
         chat_id.set_visibility(&t, ChatVisibility::Archived).await?;
         set_muted(&t, chat_id, MuteDuration::Forever).await?;
         msg_from_bob(&t, 3).await?;
-        assert_eq!(dc_get_archived_cnt(&t).await?, 1);
+        assert_eq!(get_archived_cnt(&t).await?, 1);
 
         // otherwise muted chat is not unarchived on receiving a message
         set_muted(
@@ -4298,7 +4295,7 @@ mod tests {
         )
         .await?;
         msg_from_bob(&t, 4).await?;
-        assert_eq!(dc_get_archived_cnt(&t).await?, 1);
+        assert_eq!(get_archived_cnt(&t).await?, 1);
 
         // expired mute will unarchive the chat
         set_muted(
@@ -4312,19 +4309,19 @@ mod tests {
         )
         .await?;
         msg_from_bob(&t, 5).await?;
-        assert_eq!(dc_get_archived_cnt(&t).await?, 0);
+        assert_eq!(get_archived_cnt(&t).await?, 0);
 
         // no unarchiving on sending to muted chat or on adding info messages to muted chat
         chat_id.set_visibility(&t, ChatVisibility::Archived).await?;
         set_muted(&t, chat_id, MuteDuration::Forever).await?;
         send_text_msg(&t, chat_id, "out".to_string()).await?;
         add_info_msg(&t, chat_id, "info", time()).await?;
-        assert_eq!(dc_get_archived_cnt(&t).await?, 1);
+        assert_eq!(get_archived_cnt(&t).await?, 1);
 
         // finally, unarchive on sending to not muted chat
         set_muted(&t, chat_id, MuteDuration::NotMuted).await?;
         send_text_msg(&t, chat_id, "out2".to_string()).await?;
-        assert_eq!(dc_get_archived_cnt(&t).await?, 0);
+        assert_eq!(get_archived_cnt(&t).await?, 0);
 
         Ok(())
     }
@@ -4711,7 +4708,7 @@ mod tests {
         assert_eq!(msg.match_indices("Gr.").count(), 1);
 
         // Bob receives this message, he may detect group by `References:`- or `Chat-Group:`-header
-        dc_receive_imf(&bob, msg.as_bytes(), false).await.unwrap();
+        receive_imf(&bob, msg.as_bytes(), false).await.unwrap();
         let msg = bob.get_last_msg().await;
 
         let bob_chat = Chat::load_from_db(&bob, msg.chat_id).await?;
@@ -4730,7 +4727,7 @@ mod tests {
         assert_eq!(msg.match_indices("Chat-").count(), 0);
 
         // Alice receives this message - she can still detect the group by the `References:`-header
-        dc_receive_imf(&alice, msg.as_bytes(), false).await.unwrap();
+        receive_imf(&alice, msg.as_bytes(), false).await.unwrap();
         let msg = alice.get_last_msg().await;
         assert_eq!(msg.chat_id, alice_chat_id);
         assert_eq!(msg.text, Some("ho!".to_string()));
@@ -4743,7 +4740,7 @@ mod tests {
         let t = TestContext::new_alice().await;
         let chat = t.create_chat_with_contact("bob", "bob@example.org").await;
 
-        dc_receive_imf(
+        receive_imf(
             &t,
             b"From: bob@example.org\n\
                  To: alice@example.org\n\
@@ -4790,7 +4787,7 @@ mod tests {
         let chats = Chatlist::try_load(&t, 0, None, None).await?;
         assert_eq!(chats.len(), 0);
 
-        dc_receive_imf(
+        receive_imf(
             &t,
             b"From: bob@example.org\n\
                  To: alice@example.org\n\
@@ -4837,7 +4834,7 @@ mod tests {
     async fn test_contact_request_archive() -> Result<()> {
         let t = TestContext::new_alice().await;
 
-        dc_receive_imf(
+        receive_imf(
             &t,
             b"From: bob@example.org\n\
                  To: alice@example.org\n\
@@ -4854,7 +4851,7 @@ mod tests {
         assert_eq!(chats.len(), 1);
         let chat_id = chats.get_chat_id(0)?;
         assert!(Chat::load_from_db(&t, chat_id).await?.is_contact_request());
-        assert_eq!(dc_get_archived_cnt(&t).await?, 0);
+        assert_eq!(get_archived_cnt(&t).await?, 0);
 
         // archive request without accepting or blocking
         chat_id.set_visibility(&t, ChatVisibility::Archived).await?;
@@ -4863,7 +4860,7 @@ mod tests {
         assert_eq!(chats.len(), 1);
         let chat_id = chats.get_chat_id(0)?;
         assert!(chat_id.is_archived_link());
-        assert_eq!(dc_get_archived_cnt(&t).await?, 1);
+        assert_eq!(get_archived_cnt(&t).await?, 1);
 
         let chats = Chatlist::try_load(&t, DC_GCL_ARCHIVED_ONLY, None, None).await?;
         assert_eq!(chats.len(), 1);
@@ -4884,7 +4881,7 @@ mod tests {
             .unwrap();
 
         // Alice receives a classic (non-chat) message from Bob.
-        dc_receive_imf(
+        receive_imf(
             &alice,
             b"From: bob@example.org\n\
                  To: alice@example.org\n\
@@ -4941,7 +4938,7 @@ mod tests {
         let bob_chat = bob.create_chat(&alice).await;
 
         let file = alice.get_blobdir().join(filename);
-        File::create(&file).await?.write_all(bytes).await?;
+        tokio::fs::write(&file, bytes).await?;
 
         let mut msg = Message::new(Viewtype::Sticker);
         msg.set_file(file.to_str().unwrap(), None);
@@ -5006,7 +5003,7 @@ mod tests {
         let file_name = "sticker.jpg";
         let bytes = include_bytes!("../test-data/image/avatar1000x1000.jpg");
         let file = alice.get_blobdir().join(file_name);
-        File::create(&file).await?.write_all(bytes).await?;
+        tokio::fs::write(&file, bytes).await?;
         let mut msg = Message::new(Viewtype::Sticker);
         msg.set_file(file.to_str().unwrap(), None);
 
