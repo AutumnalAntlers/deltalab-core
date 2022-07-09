@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Changes
+
+### Fixes
+- replace musl libc name resolution errors with a better message #3485
+
+
+## 1.88.0
+
+### Changes
 - Implemented "Automatic e-mail address Porting" (AEAP). You can
   configure a new address in DC now, and when receivers get messages
   they will automatically recognize your moving to a new address. #3385
