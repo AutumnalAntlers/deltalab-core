@@ -176,7 +176,7 @@ pub const DC_ELLIPSIS: &str = "[...]";
 ///
 /// Note that for simplicity maximum length is defined as the number of Unicode Scalar Values (Rust
 /// `char`s), not Unicode Grapheme Clusters.
-pub const DC_DESIRED_TEXT_LEN: usize = 5000;
+pub const DC_DESIRED_TEXT_LEN: usize = 1000;
 
 // Flags for empty server job
 
