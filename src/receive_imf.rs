@@ -550,7 +550,7 @@ async fn add_parts(
         // In lookup_chat_by_reply() and create_or_lookup_group(), it can happen that the message is put into a chat
         // but the From-address is not a member of this chat.
         if let Some(chat_id2) = chat_id {
-            if !chat::is_contact_in_chat(context, chat_id2, from_id).await? {
+            if !chat::is_contact_in_chat(context, chat_id2, from_id).await? && chat::is_contact_in_chat(context, chat_id2, ContactId::SELF).await? {
                 if mime_parser.get_mailinglist_type() == MailinglistType::None {
                     chat_id = Some(DC_CHAT_ID_TRASH);
                     info!(context, "Sender is not a group member (TRASH)");
