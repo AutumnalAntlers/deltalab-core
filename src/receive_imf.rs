@@ -550,12 +550,35 @@ async fn add_parts(
         // In lookup_chat_by_reply() and create_or_lookup_group(), it can happen that the message is put into a chat
         // but the From-address is not a member of this chat.
         if let Some(chat_id2) = chat_id {
-            if !chat::is_contact_in_chat(context, chat_id2, from_id).await? && chat::is_contact_in_chat(context, chat_id2, ContactId::SELF).await? {
-                if mime_parser.get_mailinglist_type() == MailinglistType::None {
+            if !chat::is_contact_in_chat(context, chat_id2, from_id).await? {
+                if mime_parser.get_mailinglist_type() == MailinglistType::None && chat::is_contact_in_chat(context, chat_id2, ContactId::SELF).await? {
                     chat_id = Some(DC_CHAT_ID_TRASH);
                     info!(context, "Sender is not a group member (TRASH)");
+                } else {
+                    let chat = Chat::load_from_db(context, chat_id2).await?;
+                    if chat.is_protected() {
+                        let s = stock_str::unknown_sender_for_chat(context).await;
+                        mime_parser.repl_msg_by_error(&s);
+                    } else if let Some(from) = mime_parser.from.first() {
+                        // In non-protected chats, just mark the sender as overridden. Therefore, the UI will prepend `~`
+                        // to the sender's name, indicating to the user that he/she is not part of the group.
+                        let name: &str = from.display_name.as_ref().unwrap_or(&from.addr);
+                        for part in mime_parser.parts.iter_mut() {
+                            part.param.set(Param::OverrideSenderDisplayname, name);
+                        }
+                    }
                 }
             }
+
+            better_msg = better_msg.or(apply_group_changes(
+                context,
+                mime_parser,
+                sent_timestamp,
+                chat_id2,
+                from_id,
+                to_ids,
+            )
+            .await?);
         }
 
         if chat_id.is_none() {
