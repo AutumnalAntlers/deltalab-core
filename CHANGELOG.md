@@ -4,9 +4,11 @@
 
 ### Changes
 - handle drafts from mailto links in scanned QR #3492
+- do not overflow ratelimiter leaky bucket #3496
 
 ### Fixes
 - don't squash text parts of NDN into attachments #3497
+- do not treat non-failed DSNs as NDNs #3506
 
 
 ## 1.89.0
