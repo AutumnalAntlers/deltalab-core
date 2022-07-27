@@ -2,9 +2,29 @@
 
 ## Unreleased
 
+### Added
+
 ### Changes
 
 ### Fixes
+
+
+## 1.92.0
+
+### API-Changes
+- add `dc_chat_get_mailinglist_addr()` #3520
+
+
+## 1.91.0
+
+### Added
+- python bindings: extra method to get an account running
+
+### Changes
+- refactorings #3437
+
+### Fixes
+- mark "group image changed" as system message on receiver side #3517
 
 
 ## 1.90.0
