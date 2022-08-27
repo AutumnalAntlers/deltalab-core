@@ -2510,9 +2510,9 @@ int         dc_set_location                 (dc_context_t* context, double latit
  *     Must be given in number of seconds since 00:00 hours, Jan 1, 1970 UTC.
  *     0 for "all up to now".
  * @return An array of locations, NULL is never returned.
- *     The array is sorted decending;
+ *     The array is sorted descending;
  *     the first entry in the array is the location with the newest timestamp.
- *     Note that this is only realated to the recent postion of the user
+ *     Note that this is only related to the recent position of the user
  *     if dc_array_is_independent() returns 0.
  *     The returned array must be freed using dc_array_unref().
  *
@@ -4637,6 +4637,22 @@ char*           dc_contact_get_status        (const dc_contact_t* contact);
  *     0 on error or if the contact was never seen.
  */
 int64_t         dc_contact_get_last_seen     (const dc_contact_t* contact);
+
+
+/**
+ * Check if the contact was seen recently.
+ *
+ * The UI may highlight these contacts,
+ * eg. draw a little green dot on the avatars of the users recently seen.
+ * DC_CONTACT_ID_SELF and other special contact IDs are defined as never seen recently (they should not get a dot).
+ * To get the time a contact was seen, use dc_contact_get_last_seen().
+ *
+ * @memberof dc_contact_t
+ * @param contact The contact object.
+ * @return 1=contact seen recently, 0=contact not seen recently.
+ */
+int             dc_contact_was_seen_recently (const dc_contact_t* contact);
+
 
 /**
  * Check if a contact is blocked.
