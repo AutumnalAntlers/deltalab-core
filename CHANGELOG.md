@@ -3,9 +3,18 @@
 ## Unreleased
 
 ### API-Changes
+- breaking change: replace `dc_accounts_event_emitter_t` with `dc_event_emitter_t` #3422
+
+  Type `dc_accounts_event_emitter_t` is removed.
+  `dc_accounts_get_event_emitter()` returns `dc_event_emitter_t` now, so
+  `dc_get_next_event()` should be used instead of `dc_accounts_get_next_event`
+  and `dc_event_emitter_unref()` should be used instead of
+  `dc_accounts_event_emitter_unref`.
 - add `dc_contact_was_seen_recently()` #3560
 
 ### Changes
+- order contact lists by "last seen";
+  this affects `dc_get_chat_contacts()`, `dc_get_contacts()` and `dc_get_blocked_contacts()` #3562
 
 ### Fixes
 - do not emit notifications for blocked chats #3557
