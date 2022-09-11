@@ -9,11 +9,15 @@ export type ChatListEntry=[U32,U32];
 export type I64=number;
 export type ChatListItemFetchResult=(({"type":"ChatListItem";}&{"id":U32;"name":string;"avatarPath":(string|null);"color":string;"lastUpdated":(I64|null);"summaryText1":string;"summaryText2":string;"summaryStatus":U32;"isProtected":boolean;"isGroup":boolean;"freshMessageCounter":Usize;"isSelfTalk":boolean;"isDeviceTalk":boolean;"isSendingLocation":boolean;"isSelfInGroup":boolean;"isArchived":boolean;"isPinned":boolean;"isMuted":boolean;"isContactRequest":boolean;
 /**
+ * true when chat is a broadcastlist
+ */
+"isBroadcast":boolean;
+/**
  * contact id if this is a dm chat (for view profile entry in context menu)
  */
-"dmChatContact":(U32|null);})|{"type":"ArchiveLink";}|({"type":"Error";}&{"id":U32;"error":string;}));
-export type Contact={"address":string;"color":string;"authName":string;"status":string;"displayName":string;"id":U32;"name":string;"profileImage":(string|null);"nameAndAddr":string;"isBlocked":boolean;"isVerified":boolean;};
-export type FullChat={"id":U32;"name":string;"isProtected":boolean;"profileImage":(string|null);"archived":boolean;"chatType":U32;"isUnpromoted":boolean;"isSelfTalk":boolean;"contacts":(Contact)[];"contactIds":(U32)[];"color":string;"freshMessageCounter":Usize;"isContactRequest":boolean;"isDeviceChat":boolean;"selfInGroup":boolean;"isMuted":boolean;"ephemeralTimer":U32;"canSend":boolean;};
+"dmChatContact":(U32|null);"wasSeenRecently":boolean;})|{"type":"ArchiveLink";}|({"type":"Error";}&{"id":U32;"error":string;}));
+export type Contact={"address":string;"color":string;"authName":string;"status":string;"displayName":string;"id":U32;"name":string;"profileImage":(string|null);"nameAndAddr":string;"isBlocked":boolean;"isVerified":boolean;"wasSeenRecently":boolean;};
+export type FullChat={"id":U32;"name":string;"isProtected":boolean;"profileImage":(string|null);"archived":boolean;"chatType":U32;"isUnpromoted":boolean;"isSelfTalk":boolean;"contacts":(Contact)[];"contactIds":(U32)[];"color":string;"freshMessageCounter":Usize;"isContactRequest":boolean;"isDeviceChat":boolean;"selfInGroup":boolean;"isMuted":boolean;"ephemeralTimer":U32;"canSend":boolean;"wasSeenRecently":boolean;};
 export type Viewtype=("Unknown"|
 /**
  * Text message.
@@ -94,5 +98,9 @@ export type WebxdcMessageInfo={
  * defaults to an empty string.
  * Implementations may offer an menu or a button to open this URL.
  */
-"sourceCodeUrl":(string|null);};
-export type __AllTyps=[string,boolean,Record<string,string>,U32,U32,null,(U32)[],U32,null,(U32|null),(Account)[],U32,Account,U32,string,(ProviderInfo|null),U32,boolean,U32,Record<string,string>,U32,string,(string|null),null,U32,Record<string,(string|null)>,null,U32,string,null,U32,string,Qr,U32,string,(string|null),U32,(string)[],Record<string,(string|null)>,U32,null,U32,null,U32,(U32)[],U32,U32,Usize,U32,string,U32,U32,string,null,U32,(U32|null),(string|null),(U32|null),(ChatListEntry)[],U32,(ChatListEntry)[],Record<U32,ChatListItemFetchResult>,U32,U32,FullChat,U32,U32,null,U32,U32,null,U32,string,string,U32,U32,U32,U32,(U32)[],U32,U32,Message,U32,(U32)[],Record<U32,Message>,U32,U32,Contact,U32,string,(string|null),U32,U32,U32,U32,U32,U32,null,U32,U32,null,U32,(Contact)[],U32,U32,(string|null),(U32)[],U32,U32,(string|null),(Contact)[],U32,(U32)[],Record<U32,Contact>,U32,(U32|null),Viewtype,(Viewtype|null),(Viewtype|null),(U32)[],U32,U32,string,string,null,U32,U32,U32,string,U32,U32,WebxdcMessageInfo,U32,string,U32,U32];
+"sourceCodeUrl":(string|null);
+/**
+ * True if full internet access should be granted to the app.
+ */
+"internetAccess":boolean;};
+export type __AllTyps=[string,boolean,Record<string,string>,U32,U32,null,(U32)[],U32,null,(U32|null),(Account)[],U32,Account,U32,string,(ProviderInfo|null),U32,boolean,U32,Record<string,string>,U32,string,(string|null),null,U32,Record<string,(string|null)>,null,U32,string,null,U32,string,Qr,U32,string,(string|null),U32,(string)[],Record<string,(string|null)>,U32,null,U32,null,U32,(U32)[],U32,U32,Usize,U32,string,U32,U32,string,null,U32,(U32|null),(string|null),(U32|null),(ChatListEntry)[],U32,(ChatListEntry)[],Record<U32,ChatListItemFetchResult>,U32,U32,FullChat,U32,U32,null,U32,U32,null,U32,U32,null,U32,U32,string,U32,(U32|null),[string,string],U32,U32,null,U32,U32,U32,null,U32,U32,U32,null,U32,string,string,U32,U32,U32,U32,(U32)[],U32,U32,Message,U32,(U32)[],Record<U32,Message>,U32,(U32)[],null,U32,U32,string,U32,U32,Contact,U32,string,(string|null),U32,U32,U32,U32,U32,U32,null,U32,U32,null,U32,(Contact)[],U32,U32,(string|null),(U32)[],U32,U32,(string|null),(Contact)[],U32,(U32)[],Record<U32,Contact>,U32,(U32|null),Viewtype,(Viewtype|null),(Viewtype|null),(U32)[],U32,U32,string,string,null,U32,U32,U32,string,U32,U32,WebxdcMessageInfo,U32,string,U32,U32];

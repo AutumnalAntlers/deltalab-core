@@ -11,14 +11,32 @@
   and `dc_event_emitter_unref()` should be used instead of
   `dc_accounts_event_emitter_unref`.
 - add `dc_contact_was_seen_recently()` #3560
+- jsonrpc: add functions: #3586, #3587
+  - `deleteChat()`
+  - `getChatEncryptionInfo()`
+  - `getChatSecurejoinQrCodeSvg()`
+  - `leaveGroup()`
+  - `removeContactFromChat()`
+  - `addContactToChat()`
+  - `deleteMessages()`
+  - `getMessageInfo()`
+- jsonrpc: add `is_broadcast` property to `ChatListItemFetchResult` #3584
+- jsonrpc: add `was_seen_recently` property to `ChatListItemFetchResult`, `FullChat` and `Contact` #3584
+- jsonrpc: add `webxdc_info` property to `Message` #3588
+- python: move `get_dc_event_name()` from `deltachat` to `deltachat.events` #3564
 
 ### Changes
 - order contact lists by "last seen";
   this affects `dc_get_chat_contacts()`, `dc_get_contacts()` and `dc_get_blocked_contacts()` #3562
+- add `internet_access` flag to `dc_msg_get_webxdc_info()` #3516
 
 ### Fixes
 - do not emit notifications for blocked chats #3557
 - Show attached .eml files correctly #3561
+- Auto accept contact requests if `Config::Bot` is set for a client #3567 
+- Don't prepend the subject to chat messages in mailinglists
+- fix `set_core_version.py` script to also update version in `deltachat-jsonrpc/typescript/package.json` #3585
+- Reject webxcd-updates from contacts who are not group members #3568
 
 
 ## 1.93.0

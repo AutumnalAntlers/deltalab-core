@@ -1,13 +1,15 @@
 use anyhow::{anyhow, bail, Context, Result};
 use deltachat::{
-    chat::{get_chat_media, get_chat_msgs, ChatId},
+    chat::{add_contact_to_chat, get_chat_media, get_chat_msgs, remove_contact_from_chat, ChatId},
     chatlist::Chatlist,
     config::Config,
     contact::{may_be_valid_addr, Contact, ContactId},
     context::get_info,
-    message::{Message, MsgId, Viewtype},
+    message::{delete_msgs, get_msg_info, Message, MsgId, Viewtype},
     provider::get_provider_info,
     qr,
+    qr_code_generator::get_securejoin_qr_svg,
+    securejoin,
     webxdc::StatusUpdateSerial,
 };
 use std::collections::BTreeMap;
@@ -192,12 +194,10 @@ impl CommandApi {
     }
 
     /// Set configuration values from a QR code. (technically from the URI that is stored in the qrcode)
-    /// Before this function is called, dc_check_qr() should confirm the type of the
-    /// QR code is DC_QR_ACCOUNT or DC_QR_WEBRTC_INSTANCE.
+    /// Before this function is called, `checkQr()` should confirm the type of the
+    /// QR code is `account` or `webrtcInstance`.
     ///
     /// Internally, the function will call dc_set_config() with the appropriate keys,
-    /// e.g. `addr` and `mail_pw` for DC_QR_ACCOUNT
-    /// or `webrtc_instance` for DC_QR_WEBRTC_INSTANCE.
     async fn set_config_from_qr(&self, account_id: u32, qr_content: String) -> Result<()> {
         let ctx = self.get_context(account_id).await?;
         qr::set_config_from_qr(&ctx, &qr_content).await
@@ -378,6 +378,108 @@ impl CommandApi {
         ChatId::new(chat_id).block(&ctx).await
     }
 
+    /// Delete a chat.
+    ///
+    /// Messages are deleted from the device and the chat database entry is deleted.
+    /// After that, the event #DC_EVENT_MSGS_CHANGED is posted.
+    ///
+    /// Things that are _not done_ implicitly:
+    ///
+    /// - Messages are **not deleted from the server**.
+    /// - The chat or the contact is **not blocked**, so new messages from the user/the group may appear as a contact request
+    ///   and the user may create the chat again.
+    /// - **Groups are not left** - this would
+    ///   be unexpected as (1) deleting a normal chat also does not prevent new mails
+    ///   from arriving, (2) leaving a group requires sending a message to
+    ///   all group members - especially for groups not used for a longer time, this is
+    ///   really unexpected when deletion results in contacting all members again,
+    ///   (3) only leaving groups is also a valid usecase.
+    ///
+    /// To leave a chat explicitly, use dc_remove_contact_from_chat() with
+    /// chat_id=DC_CONTACT_ID_SELF)
+    // TODO fix doc comment after adding dc_remove_contact_from_chat
+    async fn delete_chat(&self, account_id: u32, chat_id: u32) -> Result<()> {
+        let ctx = self.get_context(account_id).await?;
+        ChatId::new(chat_id).delete(&ctx).await
+    }
+
+    /// Get encryption info for a chat.
+    /// Get a multi-line encryption info, containing encryption preferences of all members.
+    /// Can be used to find out why messages sent to group are not encrypted.
+    ///
+    /// returns Multi-line text
+    async fn get_chat_encryption_info(&self, account_id: u32, chat_id: u32) -> Result<String> {
+        let ctx = self.get_context(account_id).await?;
+        ChatId::new(chat_id).get_encryption_info(&ctx).await
+    }
+
+    /// Get QR code (text and SVG) that will offer an Setup-Contact or Verified-Group invitation.
+    /// The QR code is compatible to the OPENPGP4FPR format
+    /// so that a basic fingerprint comparison also works e.g. with OpenKeychain.
+    ///
+    /// The scanning device will pass the scanned content to `checkQr()` then;
+    /// if `checkQr()` returns `askVerifyContact` or `askVerifyGroup`
+    /// an out-of-band-verification can be joined using dc_join_securejoin()
+    ///
+    /// chat_id: If set to a group-chat-id,
+    ///     the Verified-Group-Invite protocol is offered in the QR code;
+    ///     works for protected groups as well as for normal groups.
+    ///     If not set, the Setup-Contact protocol is offered in the QR code.
+    ///     See https://countermitm.readthedocs.io/en/latest/new.html
+    ///     for details about both protocols.
+    // TODO fix doc comment after adding dc_join_securejoin
+    async fn get_chat_securejoin_qr_code_svg(
+        &self,
+        account_id: u32,
+        chat_id: Option<u32>,
+    ) -> Result<(String, String)> {
+        let ctx = self.get_context(account_id).await?;
+        let chat = chat_id.map(ChatId::new);
+        Ok((
+            securejoin::get_securejoin_qr(&ctx, chat).await?,
+            get_securejoin_qr_svg(&ctx, chat).await?,
+        ))
+    }
+
+    async fn leave_group(&self, account_id: u32, chat_id: u32) -> Result<()> {
+        let ctx = self.get_context(account_id).await?;
+        remove_contact_from_chat(&ctx, ChatId::new(chat_id), ContactId::SELF).await
+    }
+
+    /// Remove a member from a group.
+    ///
+    /// If the group is already _promoted_ (any message was sent to the group),
+    /// all group members are informed by a special status message that is sent automatically by this function.
+    ///
+    /// Sends out #DC_EVENT_CHAT_MODIFIED and #DC_EVENT_MSGS_CHANGED if a status message was sent.
+    async fn remove_contact_from_chat(
+        &self,
+        account_id: u32,
+        chat_id: u32,
+        contact_id: u32,
+    ) -> Result<()> {
+        let ctx = self.get_context(account_id).await?;
+        remove_contact_from_chat(&ctx, ChatId::new(chat_id), ContactId::new(contact_id)).await
+    }
+
+    /// Add a member to a group.
+    ///
+    /// If the group is already _promoted_ (any message was sent to the group),
+    /// all group members are informed by a special status message that is sent automatically by this function.
+    ///
+    /// If the group has group protection enabled, only verified contacts can be added to the group.
+    ///
+    /// Sends out #DC_EVENT_CHAT_MODIFIED and #DC_EVENT_MSGS_CHANGED if a status message was sent.
+    async fn add_contact_to_chat(
+        &self,
+        account_id: u32,
+        chat_id: u32,
+        contact_id: u32,
+    ) -> Result<()> {
+        let ctx = self.get_context(account_id).await?;
+        add_contact_to_chat(&ctx, ChatId::new(chat_id), ContactId::new(contact_id)).await
+    }
+
     // for now only text messages, because we only used text messages in desktop thusfar
     async fn add_device_message(
         &self,
@@ -433,6 +535,24 @@ impl CommandApi {
             );
         }
         Ok(messages)
+    }
+
+    /// Delete messages. The messages are deleted on the current device and
+    /// on the IMAP server.
+    async fn delete_messages(&self, account_id: u32, message_ids: Vec<u32>) -> Result<()> {
+        let ctx = self.get_context(account_id).await?;
+        let msgs: Vec<MsgId> = message_ids.into_iter().map(MsgId::new).collect();
+        delete_msgs(&ctx, &msgs).await
+    }
+
+    /// Get an informational text for a single message. The text is multiline and may
+    /// contain e.g. the raw text of the message.
+    ///
+    /// The max. text returned is typically longer (about 100000 characters) than the
+    /// max. text returned by dc_msg_get_text() (about 30000 characters).
+    async fn get_message_info(&self, account_id: u32, message_id: u32) -> Result<String> {
+        let ctx = self.get_context(account_id).await?;
+        get_msg_info(&ctx, MsgId::new(message_id)).await
     }
 
     // ---------------------------------------------
