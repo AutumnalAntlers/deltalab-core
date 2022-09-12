@@ -414,15 +414,12 @@ impl Context {
     }
 
     /// Attempts to send queued webxdc status updates.
-    ///
-    /// Returns true if there are more status updates to send, but rate limiter does not
-    /// allow to send them. Returns false if there are no more status updates to send.
-    pub(crate) async fn flush_status_updates(&self) -> Result<bool> {
+    pub(crate) async fn flush_status_updates(&self) -> Result<()> {
         loop {
             let (instance_id, first_serial, last_serial, descr) =
                 match self.pop_smtp_status_update().await? {
                     Some(res) => res,
-                    None => return Ok(false),
+                    None => return Ok(()),
                 };
 
             if let Some(json) = self
@@ -753,6 +750,7 @@ mod tests {
     use crate::chatlist::Chatlist;
     use crate::config::Config;
     use crate::contact::Contact;
+    use crate::message;
     use crate::receive_imf::{receive_imf, receive_imf_inner};
     use crate::test_utils::TestContext;
 
@@ -2375,6 +2373,19 @@ sth_for_the = "future""#
             status,
             r#"[{"payload":7,"info":"i","summary":"s","serial":1,"max_serial":1}]"#
         );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_webxdc_delete_event() -> Result<()> {
+        let alice = TestContext::new_alice().await;
+        let chat_id = create_group_chat(&alice, ProtectionStatus::Unprotected, "foo").await?;
+        let instance = send_webxdc_instance(&alice, chat_id).await?;
+        message::delete_msgs(&alice, &[instance.id]).await?;
+        alice
+            .evtracker
+            .get_matching(|evt| matches!(evt, EventType::WebxdcInstanceDeleted { .. }))
+            .await;
         Ok(())
     }
 }

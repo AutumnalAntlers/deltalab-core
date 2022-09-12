@@ -11,7 +11,8 @@
   and `dc_event_emitter_unref()` should be used instead of
   `dc_accounts_event_emitter_unref`.
 - add `dc_contact_was_seen_recently()` #3560
-- jsonrpc: add functions: #3586, #3587
+- Fix get_connectivity_html and get_encrinfo futures not being Send. See rust-lang/rust#101650 for more information
+- jsonrpc: add functions: #3586, #3587, #3590
   - `deleteChat()`
   - `getChatEncryptionInfo()`
   - `getChatSecurejoinQrCodeSvg()`
@@ -20,15 +21,34 @@
   - `addContactToChat()`
   - `deleteMessages()`
   - `getMessageInfo()`
+  - `getBasicChatInfo()`
+  - `marknoticedChat()`
+  - `getFirstUnreadMessageOfChat()`
+  - `markseenMsgs()`
+  - `forwardMessages()`
+  - `removeDraft()`
+  - `getDraft()`
+  - `miscSendMsg()`
+  - `miscSetDraft()`
+  - `maybeNetwork()`
+  - `getConnectivity()`
+  - `getContactEncryptionInfo()`
+  - `getConnectivityHtml()`
 - jsonrpc: add `is_broadcast` property to `ChatListItemFetchResult` #3584
 - jsonrpc: add `was_seen_recently` property to `ChatListItemFetchResult`, `FullChat` and `Contact` #3584
 - jsonrpc: add `webxdc_info` property to `Message` #3588
 - python: move `get_dc_event_name()` from `deltachat` to `deltachat.events` #3564
+- jsonrpc: add `webxdc_info`, `parent_id` and `download_state` property to `Message` #3588, #3590
+- jsonrpc: add `BasicChat` object as a leaner alternative to `FullChat` #3590
+- jsonrpc: add `last_seen` property to `Contact` #3590
+- breaking! jsonrpc: replace `Message.quoted_text` and `Message.quoted_message_id` with `Message.quote` #3590
+- add separate stock strings for actions done by contacts to make them easier to translate #3518
 
 ### Changes
 - order contact lists by "last seen";
   this affects `dc_get_chat_contacts()`, `dc_get_contacts()` and `dc_get_blocked_contacts()` #3562
 - add `internet_access` flag to `dc_msg_get_webxdc_info()` #3516
+- `DC_EVENT_WEBXDC_INSTANCE_DELETED` is emitted when a message containing a webxdc gets deleted #3105
 
 ### Fixes
 - do not emit notifications for blocked chats #3557
