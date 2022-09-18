@@ -3,6 +3,18 @@
 ## Unreleased
 
 ### API-Changes
+
+### Changes
+- truncate incoming messages by lines instead of just length #3480
+- emit separate `DC_EVENT_MSGS_CHANGED` for each expired message,
+  and `DC_EVENT_WEBXDC_INSTANCE_DELETED` when a message contains a webxdc #3605
+
+### Fixes
+
+
+## 1.94.0
+
+### API-Changes
 - breaking change: replace `dc_accounts_event_emitter_t` with `dc_event_emitter_t` #3422
 
   Type `dc_accounts_event_emitter_t` is removed.
@@ -43,12 +55,15 @@
 - jsonrpc: add `last_seen` property to `Contact` #3590
 - breaking! jsonrpc: replace `Message.quoted_text` and `Message.quoted_message_id` with `Message.quote` #3590
 - add separate stock strings for actions done by contacts to make them easier to translate #3518
+- `dc_initiate_key_transfer()` is non-blocking now. #3553
+  UIs don't need to display a button to cancel sending Autocrypt Setup Message with
+  `dc_stop_ongoing_process()` anymore.
 
 ### Changes
 - order contact lists by "last seen";
   this affects `dc_get_chat_contacts()`, `dc_get_contacts()` and `dc_get_blocked_contacts()` #3562
 - add `internet_access` flag to `dc_msg_get_webxdc_info()` #3516
-- `DC_EVENT_WEBXDC_INSTANCE_DELETED` is emitted when a message containing a webxdc gets deleted #3105
+- `DC_EVENT_WEBXDC_INSTANCE_DELETED` is emitted when a message containing a webxdc gets deleted #3592
 
 ### Fixes
 - do not emit notifications for blocked chats #3557
