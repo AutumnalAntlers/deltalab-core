@@ -1,8 +1,12 @@
 //! Module to work with translatable stock strings.
 
-use anyhow::{bail, Error};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::{bail, Result};
 use strum::EnumProperty as EnumPropertyTrait;
 use strum_macros::EnumProperty;
+use tokio::sync::RwLock;
 
 use crate::blob::BlobObject;
 use crate::chat::{self, Chat, ChatId, ProtectionStatus};
@@ -13,6 +17,12 @@ use crate::message::{Message, Viewtype};
 use crate::param::Param;
 use crate::tools::timestamp_to_str;
 use humansize::{file_size_opts, FileSize};
+
+#[derive(Debug, Clone)]
+pub struct StockStrings {
+    /// Map from stock string ID to the translation.
+    translated_stockstrings: Arc<RwLock<HashMap<usize, String>>>,
+}
 
 /// Stock strings
 ///
@@ -402,15 +412,54 @@ impl StockMessage {
     }
 }
 
+impl Default for StockStrings {
+    fn default() -> Self {
+        StockStrings::new()
+    }
+}
+
+impl StockStrings {
+    pub fn new() -> Self {
+        Self {
+            translated_stockstrings: Arc::new(RwLock::new(Default::default())),
+        }
+    }
+
+    async fn translated(&self, id: StockMessage) -> String {
+        self.translated_stockstrings
+            .read()
+            .await
+            .get(&(id as usize))
+            .map(AsRef::as_ref)
+            .unwrap_or_else(|| id.fallback())
+            .to_string()
+    }
+
+    async fn set_stock_translation(&self, id: StockMessage, stockstring: String) -> Result<()> {
+        if stockstring.contains("%1") && !id.fallback().contains("%1") {
+            bail!(
+                "translation {} contains invalid %1 placeholder, default is {}",
+                stockstring,
+                id.fallback()
+            );
+        }
+        if stockstring.contains("%2") && !id.fallback().contains("%2") {
+            bail!(
+                "translation {} contains invalid %2 placeholder, default is {}",
+                stockstring,
+                id.fallback()
+            );
+        }
+        self.translated_stockstrings
+            .write()
+            .await
+            .insert(id as usize, stockstring);
+        Ok(())
+    }
+}
+
 async fn translated(context: &Context, id: StockMessage) -> String {
-    context
-        .translated_stockstrings
-        .read()
-        .await
-        .get(&(id as usize))
-        .map(AsRef::as_ref)
-        .unwrap_or_else(|| id.fallback())
-        .to_string()
+    context.translated_stockstrings.translated(id).await
 }
 
 /// Helper trait only meant to be implemented for [`String`].
@@ -1205,29 +1254,10 @@ pub(crate) async fn aeap_explanation_and_link(
 impl Context {
     /// Set the stock string for the [StockMessage].
     ///
-    pub async fn set_stock_translation(
-        &self,
-        id: StockMessage,
-        stockstring: String,
-    ) -> Result<(), Error> {
-        if stockstring.contains("%1") && !id.fallback().contains("%1") {
-            bail!(
-                "translation {} contains invalid %1 placeholder, default is {}",
-                stockstring,
-                id.fallback()
-            );
-        }
-        if stockstring.contains("%2") && !id.fallback().contains("%2") {
-            bail!(
-                "translation {} contains invalid %2 placeholder, default is {}",
-                stockstring,
-                id.fallback()
-            );
-        }
+    pub async fn set_stock_translation(&self, id: StockMessage, stockstring: String) -> Result<()> {
         self.translated_stockstrings
-            .write()
-            .await
-            .insert(id as usize, stockstring);
+            .set_stock_translation(id, stockstring)
+            .await?;
         Ok(())
     }
 
@@ -1243,7 +1273,7 @@ impl Context {
         }
     }
 
-    pub(crate) async fn update_device_chats(&self) -> Result<(), Error> {
+    pub(crate) async fn update_device_chats(&self) -> Result<()> {
         if self.get_config_bool(Config::Bot).await? {
             return Ok(());
         }
@@ -1276,6 +1306,7 @@ impl Context {
 mod tests {
     use num_traits::ToPrimitive;
 
+    use crate::chat::delete_and_reset_all_device_msgs;
     use crate::chat::Chat;
     use crate::chatlist::Chatlist;
     use crate::test_utils::TestContext;
@@ -1386,7 +1417,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_quota_exceeding_stock_str() -> anyhow::Result<()> {
+    async fn test_quota_exceeding_stock_str() -> Result<()> {
         let t = TestContext::new().await;
         let str = quota_exceeding(&t, 81).await;
         assert!(str.contains("81% "));
@@ -1396,7 +1427,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_partial_download_msg_body() -> anyhow::Result<()> {
+    async fn test_partial_download_msg_body() -> Result<()> {
         let t = TestContext::new().await;
         let str = partial_download_msg_body(&t, 1024 * 1024).await;
         assert_eq!(str, "1 MiB message");
@@ -1441,7 +1472,17 @@ mod tests {
         assert_eq!(chats.len(), 0);
 
         // a subsequent call to update_device_chats() must not re-add manally deleted messages or chats
-        t.update_device_chats().await.ok();
+        t.update_device_chats().await.unwrap();
+        let chats = Chatlist::try_load(&t, 0, None, None).await.unwrap();
+        assert_eq!(chats.len(), 0);
+
+        // Reset all device messages. This normally happens due to account export and import.
+        // Check that update_device_chats() does not add welcome message for imported account.
+        delete_and_reset_all_device_msgs(&t).await.unwrap();
+        let chats = Chatlist::try_load(&t, 0, None, None).await.unwrap();
+        assert_eq!(chats.len(), 0);
+
+        t.update_device_chats().await.unwrap();
         let chats = Chatlist::try_load(&t, 0, None, None).await.unwrap();
         assert_eq!(chats.len(), 0);
     }

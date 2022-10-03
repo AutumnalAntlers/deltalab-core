@@ -29,6 +29,7 @@ use crate::key::{self, DcKey, KeyPair, KeyPairUse};
 use crate::message::{update_msg_state, Message, MessageState, MsgId, Viewtype};
 use crate::mimeparser::MimeMessage;
 use crate::receive_imf::receive_imf;
+use crate::stock_str::StockStrings;
 use crate::tools::EmailAddress;
 
 #[allow(non_upper_case_globals)]
@@ -44,7 +45,7 @@ pub struct TestContextManager {
 }
 
 impl TestContextManager {
-    pub async fn new() -> Self {
+    pub fn new() -> Self {
         let (log_tx, _log_sink) = LogSink::create();
         Self { log_tx, _log_sink }
     }
@@ -277,7 +278,7 @@ impl TestContext {
             let mut context_names = CONTEXT_NAMES.write().unwrap();
             context_names.insert(id, name);
         }
-        let ctx = Context::new(&dbfile, id, Events::new())
+        let ctx = Context::new(&dbfile, id, Events::new(), StockStrings::new())
             .await
             .expect("failed to create context");
 
@@ -858,7 +859,7 @@ impl EventTracker {
     }
 
     /// Consumes all pending events.
-    pub async fn consume_events(&self) {
+    pub fn consume_events(&self) {
         while self.try_recv().is_ok() {}
     }
 }
@@ -1039,7 +1040,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_with_both() {
-        let mut tcm = TestContextManager::new().await;
+        let mut tcm = TestContextManager::new();
         let alice = tcm.alice().await;
         let bob = tcm.bob().await;
 

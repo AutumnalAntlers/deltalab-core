@@ -3374,6 +3374,15 @@ pub(crate) async fn delete_and_reset_all_device_msgs(context: &Context) -> Resul
         .sql
         .execute("DELETE FROM devmsglabels;", paramsv![])
         .await?;
+
+    // Insert labels for welcome messages to avoid them being readded on reconfiguration.
+    context
+        .sql
+        .execute(
+            r#"INSERT INTO devmsglabels (label) VALUES ("core-welcome-image"), ("core-welcome")"#,
+            paramsv![],
+        )
+        .await?;
     context.set_config(Config::QuotaExceeding, None).await?;
     Ok(())
 }
@@ -4559,26 +4568,24 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_set_protection() {
+    async fn test_set_protection() -> Result<()> {
         let t = TestContext::new_alice().await;
-        let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo")
-            .await
-            .unwrap();
-        let chat = Chat::load_from_db(&t, chat_id).await.unwrap();
+        t.set_config_bool(Config::BccSelf, false).await?;
+        let chat_id = create_group_chat(&t, ProtectionStatus::Unprotected, "foo").await?;
+        let chat = Chat::load_from_db(&t, chat_id).await?;
         assert!(!chat.is_protected());
         assert!(chat.is_unpromoted());
 
         // enable protection on unpromoted chat, the info-message is added via add_info_msg()
         chat_id
             .set_protection(&t, ProtectionStatus::Protected)
-            .await
-            .unwrap();
+            .await?;
 
-        let chat = Chat::load_from_db(&t, chat_id).await.unwrap();
+        let chat = Chat::load_from_db(&t, chat_id).await?;
         assert!(chat.is_protected());
         assert!(chat.is_unpromoted());
 
-        let msgs = get_chat_msgs(&t, chat_id, 0).await.unwrap();
+        let msgs = get_chat_msgs(&t, chat_id, 0).await?;
         assert_eq!(msgs.len(), 1);
 
         let msg = t.get_last_msg_in(chat_id).await;
@@ -4589,10 +4596,9 @@ mod tests {
         // disable protection again, still unpromoted
         chat_id
             .set_protection(&t, ProtectionStatus::Unprotected)
-            .await
-            .unwrap();
+            .await?;
 
-        let chat = Chat::load_from_db(&t, chat_id).await.unwrap();
+        let chat = Chat::load_from_db(&t, chat_id).await?;
         assert!(!chat.is_protected());
         assert!(chat.is_unpromoted());
 
@@ -4602,21 +4608,20 @@ mod tests {
         assert_eq!(msg.get_state(), MessageState::InNoticed);
 
         // send a message, this switches to promoted state
-        send_text_msg(&t, chat_id, "hi!".to_string()).await.unwrap();
+        send_text_msg(&t, chat_id, "hi!".to_string()).await?;
 
-        let chat = Chat::load_from_db(&t, chat_id).await.unwrap();
+        let chat = Chat::load_from_db(&t, chat_id).await?;
         assert!(!chat.is_protected());
         assert!(!chat.is_unpromoted());
 
-        let msgs = get_chat_msgs(&t, chat_id, 0).await.unwrap();
+        let msgs = get_chat_msgs(&t, chat_id, 0).await?;
         assert_eq!(msgs.len(), 3);
 
         // enable protection on promoted chat, the info-message is sent via send_msg() this time
         chat_id
             .set_protection(&t, ProtectionStatus::Protected)
-            .await
-            .unwrap();
-        let chat = Chat::load_from_db(&t, chat_id).await.unwrap();
+            .await?;
+        let chat = Chat::load_from_db(&t, chat_id).await?;
         assert!(chat.is_protected());
         assert!(!chat.is_unpromoted());
 
@@ -4624,6 +4629,8 @@ mod tests {
         assert!(msg.is_info());
         assert_eq!(msg.get_info_type(), SystemMessage::ChatProtectionEnabled);
         assert_eq!(msg.get_state(), MessageState::OutDelivered); // as bcc-self is disabled and there is nobody else in the chat
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -39,7 +39,7 @@ use types::webxdc::WebxdcMessageInfo;
 
 use self::types::{
     chat::{BasicChat, MuteDuration},
-    message::MessageViewtype,
+    message::{MessageNotificationInfo, MessageViewtype},
 };
 
 #[derive(Clone, Debug)]
@@ -65,7 +65,6 @@ impl CommandApi {
             .read()
             .await
             .get_account(id)
-            .await
             .ok_or_else(|| anyhow!("account with id {} not found", id))?;
         Ok(sc)
     }
@@ -100,7 +99,7 @@ impl CommandApi {
     }
 
     async fn get_all_account_ids(&self) -> Vec<u32> {
-        self.accounts.read().await.get_all().await
+        self.accounts.read().await.get_all()
     }
 
     /// Select account id for internally selected state.
@@ -112,14 +111,14 @@ impl CommandApi {
     /// Get the selected account id of the internal state..
     /// TODO: Likely this is deprecated as all methods take an account id now.
     async fn get_selected_account_id(&self) -> Option<u32> {
-        self.accounts.read().await.get_selected_account_id().await
+        self.accounts.read().await.get_selected_account_id()
     }
 
     /// Get a list of all configured accounts.
     async fn get_all_accounts(&self) -> Result<Vec<Account>> {
         let mut accounts = Vec::new();
-        for id in self.accounts.read().await.get_all().await {
-            let context_option = self.accounts.read().await.get_account(id).await;
+        for id in self.accounts.read().await.get_all() {
+            let context_option = self.accounts.read().await.get_account(id);
             if let Some(ctx) = context_option {
                 accounts.push(Account::from_context(&ctx, id).await?)
             } else {
@@ -135,7 +134,7 @@ impl CommandApi {
 
     /// Get top-level info for an account.
     async fn get_account_info(&self, account_id: u32) -> Result<Account> {
-        let context_option = self.accounts.read().await.get_account(account_id).await;
+        let context_option = self.accounts.read().await.get_account(account_id);
         if let Some(ctx) = context_option {
             Ok(Account::from_context(&ctx, account_id).await?)
         } else {
@@ -643,6 +642,16 @@ impl CommandApi {
         Ok(messages)
     }
 
+    /// Fetch info desktop needs for creating a notification for a message
+    async fn message_get_notification_info(
+        &self,
+        account_id: u32,
+        message_id: u32,
+    ) -> Result<MessageNotificationInfo> {
+        let ctx = self.get_context(account_id).await?;
+        MessageNotificationInfo::from_msg_id(&ctx, MsgId::new(message_id)).await
+    }
+
     /// Delete messages. The messages are deleted on the current device and
     /// on the IMAP server.
     async fn delete_messages(&self, account_id: u32, message_ids: Vec<u32>) -> Result<()> {
@@ -839,6 +848,51 @@ impl CommandApi {
 
         let media = get_chat_media(&ctx, chat_id, msg_type, or_msg_type2, or_msg_type3).await?;
         Ok(media.iter().map(|msg_id| msg_id.to_u32()).collect())
+    }
+
+    /// Search next/previous message based on a given message and a list of types.
+    /// Typically used to implement the "next" and "previous" buttons
+    /// in a gallery or in a media player.
+    ///
+    /// one combined call for getting chat::get_next_media for both directions
+    /// the manual chat::get_next_media in only one direction is not exposed by the jsonrpc yet
+    async fn chat_get_neighboring_media(
+        &self,
+        account_id: u32,
+        msg_id: u32,
+        message_type: MessageViewtype,
+        or_message_type2: Option<MessageViewtype>,
+        or_message_type3: Option<MessageViewtype>,
+    ) -> Result<(Option<u32>, Option<u32>)> {
+        let ctx = self.get_context(account_id).await?;
+
+        let msg_type: Viewtype = message_type.into();
+        let msg_type2: Viewtype = or_message_type2.map(|v| v.into()).unwrap_or_default();
+        let msg_type3: Viewtype = or_message_type3.map(|v| v.into()).unwrap_or_default();
+
+        let prev = chat::get_next_media(
+            &ctx,
+            MsgId::new(msg_id),
+            chat::Direction::Backward,
+            msg_type,
+            msg_type2,
+            msg_type3,
+        )
+        .await?
+        .map(|id| id.to_u32());
+
+        let next = chat::get_next_media(
+            &ctx,
+            MsgId::new(msg_id),
+            chat::Direction::Forward,
+            msg_type,
+            msg_type2,
+            msg_type3,
+        )
+        .await?
+        .map(|id| id.to_u32());
+
+        Ok((prev, next))
     }
 
     // ---------------------------------------------
