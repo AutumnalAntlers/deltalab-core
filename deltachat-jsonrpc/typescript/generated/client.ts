@@ -74,6 +74,13 @@ export class RawClient {
   }
 
   /**
+   * Get the combined filesize of an account in bytes
+   */
+  public getAccountFileSize(accountId: T.U32): Promise<T.U64> {
+    return (this._transport.request('get_account_file_size', [accountId] as RPC.Params)) as Promise<T.U64>;
+  }
+
+  /**
    * Returns provider for the given domain.
    *
    * This function looks up domain in offline database.
@@ -135,6 +142,11 @@ export class RawClient {
     return (this._transport.request('batch_get_config', [accountId, keys] as RPC.Params)) as Promise<Record<string,(string|null)>>;
   }
 
+
+  public setStockStrings(strings: Record<T.U32,string>): Promise<null> {
+    return (this._transport.request('set_stock_strings', [strings] as RPC.Params)) as Promise<null>;
+  }
+
   /**
    * Configures this account with the currently set parameters.
    * Setup the credential config before calling this.
@@ -148,6 +160,16 @@ export class RawClient {
    */
   public stopOngoingProcess(accountId: T.U32): Promise<null> {
     return (this._transport.request('stop_ongoing_process', [accountId] as RPC.Params)) as Promise<null>;
+  }
+
+
+  public exportSelfKeys(accountId: T.U32, path: string, passphrase: (string|null)): Promise<null> {
+    return (this._transport.request('export_self_keys', [accountId, path, passphrase] as RPC.Params)) as Promise<null>;
+  }
+
+
+  public importSelfKeys(accountId: T.U32, path: string, passphrase: (string|null)): Promise<null> {
+    return (this._transport.request('import_self_keys', [accountId, path, passphrase] as RPC.Params)) as Promise<null>;
   }
 
   /**
@@ -177,6 +199,16 @@ export class RawClient {
    */
   public getFreshMsgCnt(accountId: T.U32, chatId: T.U32): Promise<T.Usize> {
     return (this._transport.request('get_fresh_msg_cnt', [accountId, chatId] as RPC.Params)) as Promise<T.Usize>;
+  }
+
+  /**
+   * Estimate the number of messages that will be deleted
+   * by the set_config()-options `delete_device_after` or `delete_server_after`.
+   * This is typically used to show the estimated impact to the user
+   * before actually enabling deletion of old messages.
+   */
+  public estimateAutoDeletionCount(accountId: T.U32, fromServer: boolean, seconds: T.I64): Promise<T.Usize> {
+    return (this._transport.request('estimate_auto_deletion_count', [accountId, fromServer, seconds] as RPC.Params)) as Promise<T.Usize>;
   }
 
 
@@ -240,8 +272,7 @@ export class RawClient {
    *   really unexpected when deletion results in contacting all members again,
    *   (3) only leaving groups is also a valid usecase.
    *
-   * To leave a chat explicitly, use dc_remove_contact_from_chat() with
-   * chat_id=DC_CONTACT_ID_SELF)
+   * To leave a chat explicitly, use leave_group()
    */
   public deleteChat(accountId: T.U32, chatId: T.U32): Promise<null> {
     return (this._transport.request('delete_chat', [accountId, chatId] as RPC.Params)) as Promise<null>;
@@ -309,6 +340,125 @@ export class RawClient {
    */
   public addContactToChat(accountId: T.U32, chatId: T.U32, contactId: T.U32): Promise<null> {
     return (this._transport.request('add_contact_to_chat', [accountId, chatId, contactId] as RPC.Params)) as Promise<null>;
+  }
+
+  /**
+   * Get the contact IDs belonging to a chat.
+   *
+   * - for normal chats, the function always returns exactly one contact,
+   *   DC_CONTACT_ID_SELF is returned only for SELF-chats.
+   *
+   * - for group chats all members are returned, DC_CONTACT_ID_SELF is returned
+   *   explicitly as it may happen that oneself gets removed from a still existing
+   *   group
+   *
+   * - for broadcasts, all recipients are returned, DC_CONTACT_ID_SELF is not included
+   *
+   * - for mailing lists, the behavior is not documented currently, we will decide on that later.
+   *   for now, the UI should not show the list for mailing lists.
+   *   (we do not know all members and there is not always a global mailing list address,
+   *   so we could return only SELF or the known members; this is not decided yet)
+   */
+  public getChatContacts(accountId: T.U32, chatId: T.U32): Promise<(T.U32)[]> {
+    return (this._transport.request('get_chat_contacts', [accountId, chatId] as RPC.Params)) as Promise<(T.U32)[]>;
+  }
+
+  /**
+   * Create a new group chat.
+   *
+   * After creation,
+   * the group has one member with the ID DC_CONTACT_ID_SELF
+   * and is in _unpromoted_ state.
+   * This means, you can add or remove members, change the name,
+   * the group image and so on without messages being sent to all group members.
+   *
+   * This changes as soon as the first message is sent to the group members
+   * and the group becomes _promoted_.
+   * After that, all changes are synced with all group members
+   * by sending status message.
+   *
+   * To check, if a chat is still unpromoted, you can look at the `is_unpromoted` property of `BasicChat` or `FullChat`.
+   * This may be useful if you want to show some help for just created groups.
+   *
+   * @param protect If set to 1 the function creates group with protection initially enabled.
+   *     Only verified members are allowed in these groups
+   *     and end-to-end-encryption is always enabled.
+   */
+  public createGroupChat(accountId: T.U32, name: string, protect: boolean): Promise<T.U32> {
+    return (this._transport.request('create_group_chat', [accountId, name, protect] as RPC.Params)) as Promise<T.U32>;
+  }
+
+  /**
+   * Create a new broadcast list.
+   *
+   * Broadcast lists are similar to groups on the sending device,
+   * however, recipients get the messages in normal one-to-one chats
+   * and will not be aware of other members.
+   *
+   * Replies to broadcasts go only to the sender
+   * and not to all broadcast recipients.
+   * Moreover, replies will not appear in the broadcast list
+   * but in the one-to-one chat with the person answering.
+   *
+   * The name and the image of the broadcast list is set automatically
+   * and is visible to the sender only.
+   * Not asking for these data allows more focused creation
+   * and we bypass the question who will get which data.
+   * Also, many users will have at most one broadcast list
+   * so, a generic name and image is sufficient at the first place.
+   *
+   * Later on, however, the name can be changed using dc_set_chat_name().
+   * The image cannot be changed to have a unique, recognizable icon in the chat lists.
+   * All in all, this is also what other messengers are doing here.
+   */
+  public createBroadcastList(accountId: T.U32): Promise<T.U32> {
+    return (this._transport.request('create_broadcast_list', [accountId] as RPC.Params)) as Promise<T.U32>;
+  }
+
+  /**
+   * Set group name.
+   *
+   * If the group is already _promoted_ (any message was sent to the group),
+   * all group members are informed by a special status message that is sent automatically by this function.
+   *
+   * Sends out #DC_EVENT_CHAT_MODIFIED and #DC_EVENT_MSGS_CHANGED if a status message was sent.
+   */
+  public setChatName(accountId: T.U32, chatId: T.U32, newName: string): Promise<null> {
+    return (this._transport.request('set_chat_name', [accountId, chatId, newName] as RPC.Params)) as Promise<null>;
+  }
+
+  /**
+   * Set group profile image.
+   *
+   * If the group is already _promoted_ (any message was sent to the group),
+   * all group members are informed by a special status message that is sent automatically by this function.
+   *
+   * Sends out #DC_EVENT_CHAT_MODIFIED and #DC_EVENT_MSGS_CHANGED if a status message was sent.
+   *
+   * To find out the profile image of a chat, use dc_chat_get_profile_image()
+   *
+   * @param image_path Full path of the image to use as the group image. The image will immediately be copied to the
+   *     `blobdir`; the original image will not be needed anymore.
+   *      If you pass null here, the group image is deleted (for promoted groups, all members are informed about
+   *      this change anyway).
+   */
+  public setChatProfileImage(accountId: T.U32, chatId: T.U32, imagePath: (string|null)): Promise<null> {
+    return (this._transport.request('set_chat_profile_image', [accountId, chatId, imagePath] as RPC.Params)) as Promise<null>;
+  }
+
+
+  public setChatVisibility(accountId: T.U32, chatId: T.U32, visibility: T.ChatVisibility): Promise<null> {
+    return (this._transport.request('set_chat_visibility', [accountId, chatId, visibility] as RPC.Params)) as Promise<null>;
+  }
+
+
+  public setChatEphemeralTimer(accountId: T.U32, chatId: T.U32, timer: T.U32): Promise<null> {
+    return (this._transport.request('set_chat_ephemeral_timer', [accountId, chatId, timer] as RPC.Params)) as Promise<null>;
+  }
+
+
+  public getChatEphemeralTimer(accountId: T.U32, chatId: T.U32): Promise<T.U32> {
+    return (this._transport.request('get_chat_ephemeral_timer', [accountId, chatId] as RPC.Params)) as Promise<T.U32>;
   }
 
 
@@ -386,8 +536,13 @@ export class RawClient {
   }
 
 
-  public messageListGetMessageIds(accountId: T.U32, chatId: T.U32, flags: T.U32): Promise<(T.U32)[]> {
-    return (this._transport.request('message_list_get_message_ids', [accountId, chatId, flags] as RPC.Params)) as Promise<(T.U32)[]>;
+  public getMessageIds(accountId: T.U32, chatId: T.U32, flags: T.U32): Promise<(T.U32)[]> {
+    return (this._transport.request('get_message_ids', [accountId, chatId, flags] as RPC.Params)) as Promise<(T.U32)[]>;
+  }
+
+
+  public getMessageListEntries(accountId: T.U32, chatId: T.U32, flags: T.U32): Promise<(T.MessageListItem)[]> {
+    return (this._transport.request('get_message_list_entries', [accountId, chatId, flags] as RPC.Params)) as Promise<(T.MessageListItem)[]>;
   }
 
 
@@ -424,6 +579,46 @@ export class RawClient {
    */
   public getMessageInfo(accountId: T.U32, messageId: T.U32): Promise<string> {
     return (this._transport.request('get_message_info', [accountId, messageId] as RPC.Params)) as Promise<string>;
+  }
+
+  /**
+   * Asks the core to start downloading a message fully.
+   * This function is typically called when the user hits the "Download" button
+   * that is shown by the UI in case `download_state` is `'Available'` or `'Failure'`
+   *
+   * On success, the @ref DC_MSG "view type of the message" may change
+   * or the message may be replaced completely by one or more messages with other message IDs.
+   * That may happen e.g. in cases where the message was encrypted
+   * and the type could not be determined without fully downloading.
+   * Downloaded content can be accessed as usual after download.
+   *
+   * To reflect these changes a @ref DC_EVENT_MSGS_CHANGED event will be emitted.
+   */
+  public downloadFullMessage(accountId: T.U32, messageId: T.U32): Promise<null> {
+    return (this._transport.request('download_full_message', [accountId, messageId] as RPC.Params)) as Promise<null>;
+  }
+
+  /**
+   * Search messages containing the given query string.
+   * Searching can be done globally (chat_id=0) or in a specified chat only (chat_id set).
+   *
+   * Global chat results are typically displayed using dc_msg_get_summary(), chat
+   * search results may just hilite the corresponding messages and present a
+   * prev/next button.
+   *
+   * For global search, result is limited to 1000 messages,
+   * this allows incremental search done fast.
+   * So, when getting exactly 1000 results, the result may be truncated;
+   * the UIs may display sth. as "1000+ messages found" in this case.
+   * Chat search (if a chat_id is set) is not limited.
+   */
+  public searchMessages(accountId: T.U32, query: string, chatId: (T.U32|null)): Promise<(T.U32)[]> {
+    return (this._transport.request('search_messages', [accountId, query, chatId] as RPC.Params)) as Promise<(T.U32)[]>;
+  }
+
+
+  public messageIdsToSearchResults(accountId: T.U32, messageIds: (T.U32)[]): Promise<Record<T.U32,T.MessageSearchResult>> {
+    return (this._transport.request('message_ids_to_search_results', [accountId, messageIds] as RPC.Params)) as Promise<Record<T.U32,T.MessageSearchResult>>;
   }
 
   /**
@@ -489,6 +684,17 @@ export class RawClient {
    */
   public getContactEncryptionInfo(accountId: T.U32, contactId: T.U32): Promise<string> {
     return (this._transport.request('get_contact_encryption_info', [accountId, contactId] as RPC.Params)) as Promise<string>;
+  }
+
+  /**
+   * Check if an e-mail address belongs to a known and unblocked contact.
+   * To get a list of all known and unblocked contacts, use contacts_get_contacts().
+   *
+   * To validate an e-mail address independently of the contact database
+   * use check_email_validity().
+   */
+  public lookupContactIdByAddr(accountId: T.U32, addr: string): Promise<(T.U32|null)> {
+    return (this._transport.request('lookup_contact_id_by_addr', [accountId, addr] as RPC.Params)) as Promise<(T.U32|null)>;
   }
 
   /**
@@ -562,6 +768,11 @@ export class RawClient {
   }
 
 
+  public getLocations(accountId: T.U32, chatId: (T.U32|null), contactId: (T.U32|null), timestampBegin: T.I64, timestampEnd: T.I64): Promise<(T.Location)[]> {
+    return (this._transport.request('get_locations', [accountId, chatId, contactId, timestampBegin, timestampEnd] as RPC.Params)) as Promise<(T.Location)[]>;
+  }
+
+
   public webxdcSendStatusUpdate(accountId: T.U32, instanceMsgId: T.U32, updateStr: string, description: string): Promise<null> {
     return (this._transport.request('webxdc_send_status_update', [accountId, instanceMsgId, updateStr, description] as RPC.Params)) as Promise<null>;
   }
@@ -600,6 +811,11 @@ export class RawClient {
    */
   public getDraft(accountId: T.U32, chatId: T.U32): Promise<(T.Message|null)> {
     return (this._transport.request('get_draft', [accountId, chatId] as RPC.Params)) as Promise<(T.Message|null)>;
+  }
+
+
+  public sendVideochatInvitation(accountId: T.U32, chatId: T.U32): Promise<T.U32> {
+    return (this._transport.request('send_videochat_invitation', [accountId, chatId] as RPC.Params)) as Promise<T.U32>;
   }
 
   /**

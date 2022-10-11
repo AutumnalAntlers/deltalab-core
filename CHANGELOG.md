@@ -3,6 +3,31 @@
 ## Unreleased
 
 ### API-Changes
+- jsonrpc: add function: #3641, #3645
+  - `getChatContacts()`
+  - `createGroupChat()`
+  - `createBroadcastList()`
+  - `setChatName()`
+  - `setChatProfileImage()`
+  - `downloadFullMessage()`
+  - `lookupContactIdByAddr()`
+  - `sendVideochatInvitation()`
+  - `searchMessages()`
+  - `messageIdsToSearchResults()`
+  - `setChatVisibility()`
+  - `getChatEphemeralTimer()`
+  - `setChatEphemeralTimer()`
+  - `getLocations()`
+  - `getAccountFileSize()`
+  - `estimateAutoDeletionCount()`
+  - `setStockStrings()`
+  - `exportSelfKeys()`
+  - `importSelfKeys()`
+- breaking: jsonrpc: remove function `messageListGetMessageIds()`, it is replaced by `getMessageIds()` and `getMessageListEntries()` the latter returns a new `MessageListItem` type, which is the now prefered way of using the message list.
+- jsonrpc: add type: #3641, #3645
+  - `MessageSearchResult`
+  - `Location`
+
 
 ### Changes
 
