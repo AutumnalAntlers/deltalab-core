@@ -81,6 +81,7 @@ enum MessageQuote {
         override_sender_name: Option<String>,
         image: Option<String>,
         is_forwarded: bool,
+        view_type: MessageViewtype,
     },
 }
 
@@ -129,6 +130,7 @@ impl MessageObject {
                             None
                         },
                         is_forwarded: quote.is_forwarded(),
+                        view_type: quote.get_viewtype().into(),
                     })
                 }
                 None => Some(MessageQuote::JustText { text: quoted_text }),
@@ -388,7 +390,7 @@ impl MessageSearchResult {
 }
 
 #[derive(Serialize, TypeDef)]
-#[serde(rename_all = "camelCase", rename = "MessageListItem")]
+#[serde(rename_all = "camelCase", rename = "MessageListItem", tag = "kind")]
 pub enum JSONRPCMessageListItem {
     Message {
         msg_id: u32,
@@ -397,7 +399,7 @@ pub enum JSONRPCMessageListItem {
     /// Day marker, separating messages that correspond to different
     /// days according to local time.
     DayMarker {
-        /// Marker timestamp, for day markers
+        /// Marker timestamp, for day markers, in unix milliseconds
         timestamp: i64,
     },
 }

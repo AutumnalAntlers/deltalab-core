@@ -24,7 +24,7 @@ use deltachat::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::{collections::HashMap, str::FromStr};
-use tokio::sync::RwLock;
+use tokio::{fs, sync::RwLock};
 use walkdir::WalkDir;
 use yerpc::rpc;
 
@@ -140,9 +140,31 @@ impl CommandApi {
         Ok(accounts)
     }
 
+    async fn start_io_for_all_accounts(&self) -> Result<()> {
+        self.accounts.read().await.start_io().await;
+        Ok(())
+    }
+
+    async fn stop_io_for_all_accounts(&self) -> Result<()> {
+        self.accounts.read().await.stop_io().await;
+        Ok(())
+    }
+
     // ---------------------------------------------
     // Methods that work on individual accounts
     // ---------------------------------------------
+
+    async fn start_io(&self, id: u32) -> Result<()> {
+        let ctx = self.get_context(id).await?;
+        ctx.start_io().await;
+        Ok(())
+    }
+
+    async fn stop_io(&self, id: u32) -> Result<()> {
+        let ctx = self.get_context(id).await?;
+        ctx.stop_io().await;
+        Ok(())
+    }
 
     /// Get top-level info for an account.
     async fn get_account_info(&self, account_id: u32) -> Result<Account> {
@@ -514,7 +536,7 @@ impl CommandApi {
     ///
     /// The scanning device will pass the scanned content to `checkQr()` then;
     /// if `checkQr()` returns `askVerifyContact` or `askVerifyGroup`
-    /// an out-of-band-verification can be joined using dc_join_securejoin()
+    /// an out-of-band-verification can be joined using `secure_join()`
     ///
     /// chat_id: If set to a group-chat-id,
     ///     the Verified-Group-Invite protocol is offered in the QR code;
@@ -524,7 +546,6 @@ impl CommandApi {
     ///     for details about both protocols.
     ///
     /// return format: `[code, svg]`
-    // TODO fix doc comment after adding dc_join_securejoin
     async fn get_chat_securejoin_qr_code_svg(
         &self,
         account_id: u32,
@@ -536,6 +557,33 @@ impl CommandApi {
             securejoin::get_securejoin_qr(&ctx, chat).await?,
             get_securejoin_qr_svg(&ctx, chat).await?,
         ))
+    }
+
+    /// Continue a Setup-Contact or Verified-Group-Invite protocol
+    /// started on another device with `get_chat_securejoin_qr_code_svg()`.
+    /// This function is typically called when `check_qr()` returns
+    /// type=AskVerifyContact or type=AskVerifyGroup.
+    ///
+    /// The function returns immediately and the handshake runs in background,
+    /// sending and receiving several messages.
+    /// During the handshake, info messages are added to the chat,
+    /// showing progress, success or errors.
+    ///
+    /// Subsequent calls of `secure_join()` will abort previous, unfinished handshakes.
+    ///
+    /// See https://countermitm.readthedocs.io/en/latest/new.html
+    /// for details about both protocols.
+    ///
+    /// **qr**: The text of the scanned QR code. Typically, the same string as given
+    ///     to `check_qr()`.
+    ///
+    /// **returns**: The chat ID of the joined chat, the UI may redirect to the this chat.
+    ///         A returned chat ID does not guarantee that the chat is protected or the belonging contact is verified.
+    ///
+    async fn secure_join(&self, account_id: u32, qr: String) -> Result<u32> {
+        let ctx = self.get_context(account_id).await?;
+        let chat_id = securejoin::join_securejoin(&ctx, &qr).await?;
+        Ok(chat_id.to_u32())
     }
 
     async fn leave_group(&self, account_id: u32, chat_id: u32) -> Result<()> {
@@ -848,7 +896,7 @@ impl CommandApi {
             .collect())
     }
 
-    async fn get_message_list_entries(
+    async fn get_message_list_items(
         &self,
         account_id: u32,
         chat_id: u32,
@@ -865,6 +913,11 @@ impl CommandApi {
     async fn message_get_message(&self, account_id: u32, message_id: u32) -> Result<MessageObject> {
         let ctx = self.get_context(account_id).await?;
         MessageObject::from_message_id(&ctx, message_id).await
+    }
+
+    async fn get_message_html(&self, account_id: u32, message_id: u32) -> Result<Option<String>> {
+        let ctx = self.get_context(account_id).await?;
+        MsgId::new(message_id).get_html(&ctx).await
     }
 
     async fn message_get_messages(
@@ -1103,6 +1156,28 @@ impl CommandApi {
         Ok(contacts)
     }
 
+    async fn delete_contact(&self, account_id: u32, contact_id: u32) -> Result<bool> {
+        let ctx = self.get_context(account_id).await?;
+        let contact_id = ContactId::new(contact_id);
+
+        Contact::delete(&ctx, contact_id).await?;
+        Ok(true)
+    }
+
+    async fn change_contact_name(
+        &self,
+        account_id: u32,
+        contact_id: u32,
+        name: String,
+    ) -> Result<()> {
+        let ctx = self.get_context(account_id).await?;
+        let contact_id = ContactId::new(contact_id);
+        let contact = Contact::load_from_db(&ctx, contact_id).await?;
+        let addr = contact.get_addr();
+        Contact::create(&ctx, &name, addr).await?;
+        Ok(())
+    }
+
     /// Get encryption info for a contact.
     /// Get a multi-line encryption info, containing your fingerprint and the
     /// fingerprint of the contact, used e.g. to compare the fingerprints for a simple out-of-band verification.
@@ -1208,6 +1283,45 @@ impl CommandApi {
         .map(|id| id.to_u32());
 
         Ok((prev, next))
+    }
+
+    // ---------------------------------------------
+    //                   backup
+    // ---------------------------------------------
+
+    async fn export_backup(
+        &self,
+        account_id: u32,
+        destination: String,
+        passphrase: Option<String>,
+    ) -> Result<()> {
+        let ctx = self.get_context(account_id).await?;
+        ctx.stop_io().await;
+        let result = imex::imex(
+            &ctx,
+            imex::ImexMode::ExportBackup,
+            destination.as_ref(),
+            passphrase,
+        )
+        .await;
+        ctx.start_io().await;
+        result
+    }
+
+    async fn import_backup(
+        &self,
+        account_id: u32,
+        path: String,
+        passphrase: Option<String>,
+    ) -> Result<()> {
+        let ctx = self.get_context(account_id).await?;
+        imex::imex(
+            &ctx,
+            imex::ImexMode::ImportBackup,
+            path.as_ref(),
+            passphrase,
+        )
+        .await
     }
 
     // ---------------------------------------------
@@ -1337,6 +1451,21 @@ impl CommandApi {
         forward_msgs(&ctx, &message_ids, ChatId::new(chat_id)).await
     }
 
+    async fn send_sticker(
+        &self,
+        account_id: u32,
+        chat_id: u32,
+        sticker_path: String,
+    ) -> Result<u32> {
+        let ctx = self.get_context(account_id).await?;
+
+        let mut msg = Message::new(Viewtype::Sticker);
+        msg.set_file(&sticker_path, None);
+
+        let message_id = deltachat::chat::send_msg(&ctx, ChatId::new(chat_id), &mut msg).await?;
+        Ok(message_id.to_u32())
+    }
+
     // ---------------------------------------------
     //           functions for the composer
     //    the composer is the message input field
@@ -1370,6 +1499,63 @@ impl CommandApi {
     //           misc prototyping functions
     //       that might get removed later again
     // ---------------------------------------------
+
+    async fn misc_get_sticker_folder(&self, account_id: u32) -> Result<String> {
+        let ctx = self.get_context(account_id).await?;
+        let account_folder = ctx
+            .get_dbfile()
+            .parent()
+            .context("account folder not found")?;
+        let sticker_folder_path = account_folder.join("./stickers");
+        fs::create_dir_all(&sticker_folder_path).await?;
+        sticker_folder_path
+            .to_str()
+            .map(|s| s.to_owned())
+            .context("path conversion to string failed")
+    }
+
+    /// for desktop, get stickers from stickers folder,
+    /// grouped by the folder they are in.
+    async fn misc_get_stickers(&self, account_id: u32) -> Result<HashMap<String, Vec<String>>> {
+        let ctx = self.get_context(account_id).await?;
+        let account_folder = ctx
+            .get_dbfile()
+            .parent()
+            .context("account folder not found")?;
+        let sticker_folder_path = account_folder.join("./stickers");
+        fs::create_dir_all(&sticker_folder_path).await?;
+        let mut result = HashMap::new();
+
+        let mut packs = tokio::fs::read_dir(sticker_folder_path).await?;
+        while let Some(entry) = packs.next_entry().await? {
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            let pack_name = entry.file_name().into_string().unwrap_or_default();
+            let mut stickers = tokio::fs::read_dir(entry.path()).await?;
+            let mut sticker_paths = Vec::new();
+            while let Some(sticker_entry) = stickers.next_entry().await? {
+                if !sticker_entry.file_type().await?.is_file() {
+                    continue;
+                }
+                let sticker_name = sticker_entry.file_name().into_string().unwrap_or_default();
+                if sticker_name.ends_with(".png") || sticker_name.ends_with(".webp") {
+                    sticker_paths.push(
+                        sticker_entry
+                            .path()
+                            .to_str()
+                            .map(|s| s.to_owned())
+                            .context("path conversion to string failed")?,
+                    );
+                }
+            }
+            if !sticker_paths.is_empty() {
+                result.insert(pack_name, sticker_paths);
+            }
+        }
+
+        Ok(result)
+    }
 
     /// Returns the messageid of the sent message
     async fn misc_send_text_message(

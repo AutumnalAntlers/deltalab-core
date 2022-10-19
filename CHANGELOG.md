@@ -3,7 +3,17 @@
 ## Unreleased
 
 ### API-Changes
-- jsonrpc: add function: #3641, #3645
+
+### Changes
+- simplify `UPSERT` queries #3676
+
+### Fixes
+
+
+## 1.97.0
+
+### API-Changes
+- jsonrpc: add function: #3641, #3645, #3653
   - `getChatContacts()`
   - `createGroupChat()`
   - `createBroadcastList()`
@@ -23,17 +33,34 @@
   - `setStockStrings()`
   - `exportSelfKeys()`
   - `importSelfKeys()`
-- breaking: jsonrpc: remove function `messageListGetMessageIds()`, it is replaced by `getMessageIds()` and `getMessageListEntries()` the latter returns a new `MessageListItem` type, which is the now prefered way of using the message list.
+  - `sendSticker()`
+  - `changeContactName()`
+  - `deleteContact()`
+  - `joinSecurejoin()`
+  - `stopIoForAllAccounts()`
+  - `startIoForAllAccounts()`
+  - `startIo()`
+  - `stopIo()`
+  - `exportBackup()`
+  - `importBackup()`
+  - `getMessageHtml()` #3671
+  - `miscGetStickerFolder` and `miscGetStickers` #3672
+- breaking: jsonrpc: remove function `messageListGetMessageIds()`, it is replaced by `getMessageIds()` and `getMessageListItems()` the latter returns a new `MessageListItem` type, which is the now prefered way of using the message list.
 - jsonrpc: add type: #3641, #3645
   - `MessageSearchResult`
   - `Location`
+- jsonrpc: add `viewType` to quoted message(`MessageQuote` type) in `Message` object type #3651
 
 
 ### Changes
+- jsonrpc in cffi also sends events now #3662
+- jsonrpc: new format for events and better typescript autocompletion
+- Join all "[migration] vXX" log messages into one
 
 ### Fixes
 - share stock string translations across accounts created by the same account manager #3640
 - suppress welcome device messages after account import #3642
+- fix unix timestamp used for daymarker #3660
 
 ## 1.96.0
 
