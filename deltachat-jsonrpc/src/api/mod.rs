@@ -17,6 +17,7 @@ use deltachat::{
     provider::get_provider_info,
     qr,
     qr_code_generator::get_securejoin_qr_svg,
+    reaction::send_reaction,
     securejoin,
     stock_str::StockMessage,
     webxdc::StatusUpdateSerial,
@@ -34,7 +35,7 @@ pub mod events;
 pub mod types;
 
 use crate::api::types::chat_list::{get_chat_list_item_by_id, ChatListItemFetchResult};
-use crate::api::types::QrObject;
+use crate::api::types::qr::QrObject;
 
 use types::account::Account;
 use types::chat::FullChat;
@@ -1463,6 +1464,23 @@ impl CommandApi {
         msg.set_file(&sticker_path, None);
 
         let message_id = deltachat::chat::send_msg(&ctx, ChatId::new(chat_id), &mut msg).await?;
+        Ok(message_id.to_u32())
+    }
+
+    /// Send a reaction to message.
+    ///
+    /// Reaction is a string of emojis separated by spaces. Reaction to a
+    /// single message can be sent multiple times. The last reaction
+    /// received overrides all previously received reactions. It is
+    /// possible to remove all reactions by sending an empty string.
+    async fn send_reaction(
+        &self,
+        account_id: u32,
+        message_id: u32,
+        reaction: Vec<String>,
+    ) -> Result<u32> {
+        let ctx = self.get_context(account_id).await?;
+        let message_id = send_reaction(&ctx, MsgId::new(message_id), &reaction.join(" ")).await?;
         Ok(message_id.to_u32())
     }
 

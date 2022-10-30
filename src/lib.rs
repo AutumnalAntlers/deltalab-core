@@ -93,6 +93,7 @@ mod update_helper;
 pub mod webxdc;
 #[macro_use]
 mod dehtml;
+mod authres;
 mod color;
 pub mod html;
 pub mod plaintext;
@@ -103,6 +104,7 @@ pub mod receive_imf;
 pub mod tools;
 
 pub mod accounts;
+pub mod reaction;
 
 /// if set imap/incoming and smtp/outgoing MIME messages will be printed
 pub const DCC_MIME_DEBUG: &str = "DCC_MIME_DEBUG";

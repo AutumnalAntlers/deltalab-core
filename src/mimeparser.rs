@@ -15,7 +15,7 @@ use crate::blob::BlobObject;
 use crate::constants::{DC_DESIRED_TEXT_LINES, DC_DESIRED_TEXT_LINE_LEN};
 use crate::contact::{addr_cmp, addr_normalize, ContactId};
 use crate::context::Context;
-use crate::decrypt::{create_decryption_info, try_decrypt};
+use crate::decrypt::{prepare_decryption, try_decrypt};
 use crate::dehtml::dehtml;
 use crate::events::EventType;
 use crate::format_flowed::unformat_flowed;
@@ -178,7 +178,7 @@ impl MimeMessage {
             .get_header_value(HeaderDef::Date)
             .and_then(|v| mailparse::dateparse(&v).ok())
             .unwrap_or_default();
-        let hop_info = parse_receive_headers(&mail.get_headers());
+        let mut hop_info = parse_receive_headers(&mail.get_headers());
 
         let mut headers = Default::default();
         let mut recipients = Default::default();
@@ -220,7 +220,9 @@ impl MimeMessage {
         let mut mail_raw = Vec::new();
         let mut gossiped_addr = Default::default();
         let mut from_is_signed = false;
-        let mut decryption_info = create_decryption_info(context, &mail, message_time).await?;
+        let mut decryption_info = prepare_decryption(context, &mail, &from, message_time).await?;
+        hop_info += "\n\n";
+        hop_info += &decryption_info.dkim_results.to_string();
 
         // `signatures` is non-empty exactly if the message was encrypted and correctly signed.
         let (mail, signatures, warn_empty_signature) =
@@ -369,6 +371,11 @@ impl MimeMessage {
         parser.heuristically_parse_ndn(context).await;
         parser.parse_headers(context).await?;
 
+        if !decryption_info.dkim_results.allow_keychange {
+            for part in parser.parts.iter_mut() {
+                part.error = Some("Seems like DKIM failed, this either is an attack or (more likely) a bug in Authentication-Results checking. Please tell us about this at https://support.delta.chat.".to_string());
+            }
+        }
         if warn_empty_signature && parser.signatures.is_empty() {
             for part in parser.parts.iter_mut() {
                 part.error = Some("No valid signature".to_string());
@@ -549,7 +556,10 @@ impl MimeMessage {
             }
 
             if prepend_subject && !subject.is_empty() {
-                let part_with_text = self.parts.iter_mut().find(|part| !part.msg.is_empty());
+                let part_with_text = self
+                    .parts
+                    .iter_mut()
+                    .find(|part| !part.msg.is_empty() && !part.is_reaction);
                 if let Some(mut part) = part_with_text {
                     part.msg = format!("{} – {}", subject, part.msg);
                 }
@@ -911,6 +921,7 @@ impl MimeMessage {
         Ok(any_part_added)
     }
 
+    /// Returns true if any part was added, false otherwise.
     async fn add_single_part_if_known(
         &mut self,
         context: &Context,
@@ -943,6 +954,30 @@ impl MimeMessage {
                     mime::IMAGE | mime::AUDIO | mime::VIDEO | mime::APPLICATION => {
                         warn!(context, "Missing attachment");
                         return Ok(false);
+                    }
+                    mime::TEXT
+                        if mail.get_content_disposition().disposition
+                            == DispositionType::Extension("reaction".to_string()) =>
+                    {
+                        // Reaction.
+                        let decoded_data = match mail.get_body() {
+                            Ok(decoded_data) => decoded_data,
+                            Err(err) => {
+                                warn!(context, "Invalid body parsed {:?}", err);
+                                // Note that it's not always an error - might be no data
+                                return Ok(false);
+                            }
+                        };
+
+                        let part = Part {
+                            typ: Viewtype::Text,
+                            mimetype: Some(mime_type),
+                            msg: decoded_data,
+                            is_reaction: true,
+                            ..Default::default()
+                        };
+                        self.do_add_single_part(part);
+                        return Ok(true);
                     }
                     mime::TEXT | mime::HTML => {
                         let decoded_data = match mail.get_body() {
@@ -1642,6 +1677,9 @@ pub struct Part {
     /// note that multipart/related may contain further multipart nestings
     /// and all of them needs to be marked with `is_related`.
     pub(crate) is_related: bool,
+
+    /// Part is an RFC 9078 reaction.
+    pub(crate) is_reaction: bool,
 }
 
 /// return mimetype and viewtype for a parsed mail
@@ -3323,6 +3361,41 @@ Message.
         );
 
         assert_eq!(mime_message.parts[0].org_filename, Some(".eml".to_string()));
+
+        Ok(())
+    }
+
+    /// Tests parsing of MIME message containing RFC 9078 reaction.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_parse_reaction() -> Result<()> {
+        let alice = TestContext::new_alice().await;
+
+        let mime_message = MimeMessage::from_bytes(
+            &alice,
+            "To: alice@example.org\n\
+From: bob@example.net\n\
+Date: Today, 29 February 2021 00:00:10 -800\n\
+Message-ID: 56789@example.net\n\
+In-Reply-To: 12345@example.org\n\
+Subject: Meeting\n\
+Mime-Version: 1.0 (1.0)\n\
+Content-Type: text/plain; charset=utf-8\n\
+Content-Disposition: reaction\n\
+\n\
+\u{1F44D}"
+                .as_bytes(),
+        )
+        .await?;
+
+        assert_eq!(mime_message.parts.len(), 1);
+        assert_eq!(mime_message.parts[0].is_reaction, true);
+        assert_eq!(
+            mime_message
+                .get_header(HeaderDef::InReplyTo)
+                .and_then(|msgid| parse_message_id(msgid).ok())
+                .unwrap(),
+            "12345@example.org"
+        );
 
         Ok(())
     }

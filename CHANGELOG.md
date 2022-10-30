@@ -5,6 +5,19 @@
 ### API-Changes
 
 ### Changes
+
+### Fixes
+- `dc_search_msgs()` returns unaccepted requests #3694
+
+
+## 1.98.0
+
+### API-Changes
+- jsonrpc: typescript client: export constants under `C` enum, similar to how its exported from `deltachat-node` #3681
+- added reactions support #3644
+- jsonrpc: reactions: added reactions to `Message` type and the `sendReaction()` method #3686
+
+### Changes
 - simplify `UPSERT` queries #3676
 
 ### Fixes
@@ -53,6 +66,9 @@
 
 
 ### Changes
+- Look at Authentication-Results. Don't accept Autocrypt key changes
+  if they come with negative authentiation results while this contact
+  sent emails with positive authentication results in the past. #3583
 - jsonrpc in cffi also sends events now #3662
 - jsonrpc: new format for events and better typescript autocompletion
 - Join all "[migration] vXX" log messages into one
