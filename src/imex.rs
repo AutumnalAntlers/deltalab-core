@@ -107,17 +107,16 @@ pub async fn imex(
 }
 
 /// Returns the filename of the backup found (otherwise an error)
-pub async fn has_backup(context: &Context, dir_name: &Path) -> Result<String> {
+pub async fn has_backup(_context: &Context, dir_name: &Path) -> Result<String> {
     let mut dir_iter = tokio::fs::read_dir(dir_name).await?;
     let mut newest_backup_name = "".to_string();
     let mut newest_backup_path: Option<PathBuf> = None;
-    let self_addr = context.get_primary_self_addr().await?;
 
     while let Ok(Some(dirent)) = dir_iter.next_entry().await {
         let path = dirent.path();
         let name = dirent.file_name();
         let name: String = name.to_string_lossy().into();
-        if name.starts_with(&self_addr)
+        if name.starts_with("delta-chat")
             && name.ends_with(".tar")
             && (newest_backup_name.is_empty() || name > newest_backup_name)
         {
@@ -481,7 +480,7 @@ fn get_next_backup_path(folder: &Path, addr: &str, backup_time: i64) -> Result<(
     let folder = PathBuf::from(folder);
     let stem = chrono::NaiveDateTime::from_timestamp(backup_time, 0)
         // Don't change this file name format, in `dc_imex_has_backup` we use string comparison to determine which backup is newer:
-        .format(&format!("{}-%Y-%m-%d", &addr).to_string())
+        .format(&format!("delta-chat-{}-%Y-%m-%d", &addr).to_string())
         .to_string();
 
     // 64 backup files per day should be enough for everyone
