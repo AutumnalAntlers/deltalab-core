@@ -226,7 +226,7 @@ impl ChatId {
     ) -> Result<Self> {
         let row_id =
             context.sql.insert(
-                "INSERT INTO chats (type, name, grpid, blocked, created_timestamp, protected, param, muted_until) VALUES(?, ?, ?, ?, ?, ?, ?, ?);",
+                "INSERT INTO chats (type, name, grpid, blocked, created_timestamp, protected, param) VALUES(?, ?, ?, ?, ?, ?, ?);",
                 paramsv![
                     chattype,
                     grpname,
@@ -235,11 +235,6 @@ impl ChatId {
                     create_smeared_timestamp(context).await,
                     create_protected,
                     param.unwrap_or_default(),
-		    if chattype == Chattype::Group || chattype == Chattype::Mailinglist {
-			-1
-		    } else {
-			0
-		    },
                 ],
             ).await?;
 
