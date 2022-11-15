@@ -2056,8 +2056,9 @@ char*           dc_get_contact_encrinfo      (dc_context_t* context, uint32_t co
 
 
 /**
- * Delete a contact. The contact is deleted from the local device. It may happen that this is not
- * possible as the contact is in use. In this case, the contact can be blocked.
+ * Delete a contact so that it disappears from the corresponding lists.
+ * Depending on whether there are ongoing chats, deletion is done by physical deletion or hiding.
+ * The contact is deleted from the local device.
  *
  * May result in a #DC_EVENT_CONTACTS_CHANGED event.
  *
@@ -4097,9 +4098,19 @@ int             dc_msg_get_info_type          (const dc_msg_t* msg);
 
 
 // DC_INFO* uses the same values as SystemMessage in rust-land
-#define         DC_INFO_PROTECTION_ENABLED     11
-#define         DC_INFO_PROTECTION_DISABLED    12
-
+#define         DC_INFO_UNKNOWN                    0
+#define         DC_INFO_GROUP_NAME_CHANGED         2
+#define         DC_INFO_GROUP_IMAGE_CHANGED        3
+#define         DC_INFO_MEMBER_ADDED_TO_GROUP      4
+#define         DC_INFO_MEMBER_REMOVED_FROM_GROUP  5
+#define         DC_INFO_AUTOCRYPT_SETUP_MESSAGE    6
+#define         DC_INFO_SECURE_JOIN_MESSAGE        7
+#define         DC_INFO_LOCATIONSTREAMING_ENABLED  8
+#define         DC_INFO_LOCATION_ONLY              9
+#define         DC_INFO_EPHEMERAL_TIMER_CHANGED   10
+#define         DC_INFO_PROTECTION_ENABLED        11
+#define         DC_INFO_PROTECTION_DISABLED       12
+#define         DC_INFO_WEBXDC_INFO_MESSAGE       32
 
 /**
  * Check if a message is still in creation. A message is in creation between
@@ -5623,6 +5634,17 @@ void dc_event_unref(dc_event_t* event);
  * @param data2 (int) msg_id
  */
 #define DC_EVENT_INCOMING_MSG             2005
+
+/**
+ * Downloading a bunch of messages just finished. This is an experimental
+ * event to allow the UI to only show one notification per message bunch,
+ * instead of cluttering the user with many notifications.
+ * For each of the msg_ids, an additional #DC_EVENT_INCOMING_MSG event was emitted before.
+ * 
+ * @param data1 0
+ * @param data2 (char*) msg_ids, a json object with the message ids.
+ */
+#define DC_EVENT_INCOMING_MSG_BUNCH       2006
 
 
 /**

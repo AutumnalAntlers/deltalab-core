@@ -1,8 +1,8 @@
 {
   "author": "Delta Chat Developers (ML) <delta@codespeak.net>",
   "dependencies": {
+    "@deltachat/tiny-emitter": "3.0.0",
     "isomorphic-ws": "^4.0.1",
-    "tiny-emitter": "git+https://github.com/Simon-Laux/tiny-emitter.git",
     "yerpc": "^0.3.3"
   },
   "devDependencies": {
@@ -41,12 +41,12 @@
     "prettier:check": "prettier --check **.ts",
     "prettier:fix": "prettier --write **.ts",
     "test": "run-s test:prepare test:run-coverage test:report-coverage",
-    "test:prepare": "cargo build --features webserver --bin deltachat-jsonrpc-server",
+    "test:prepare": "cargo build --package deltachat-rpc-server --bin deltachat-rpc-server",
     "test:report-coverage": "node report_api_coverage.mjs",
     "test:run": "mocha dist/test",
     "test:run-coverage": "COVERAGE=1 NODE_OPTIONS=--enable-source-maps c8 --include 'dist/*' -r text -r html -r json mocha dist/test"
   },
   "type": "module",
   "types": "dist/deltachat.d.ts",
-  "version": "1.98.0"
+  "version": "1.101.0"
 }

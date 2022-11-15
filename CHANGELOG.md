@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Changes
+
+### API-Changes
+
+### Fixes
+
+
+## 1.101.0
+
+### Changes
+- add `configured_inbox_folder` to account info #3748
+- `dc_delete_contact()` hides contacts if referenced #3751
+- add IMAP UIDs to message info #3755
+
+### Fixes
+- improve IMAP logging, in particular fix incorrect "IMAP IDLE protocol
+  timed out" message on network error during IDLE #3749
+- pop Recently Seen Loop event out of the queue when it is in the past
+  to avoid busy looping #3753
+- fix build failures by going back to standard `async_zip` #3747
+
+
+## 1.100.0
+
+### API-Changes
+- jsonrpc: add `miscSaveSticker` method
+
+### Changes
+- add JSON-RPC stdio server `deltachat-rpc-server` and use it for JSON-RPC tests #3695
+- update rPGP from 0.8 to 0.9 #3737
+- jsonrpc: typescript client: use npm released deltachat fork of the tiny emitter package #3741
+- jsonrpc: show sticker image in quote #3744
+
+
+
+## 1.99.0
+
 ### API-Changes
 - breaking jsonrpc: changed function naming
   - `autocryptInitiateKeyTransfer` -> `initiateAutocryptKeyTransfer`
@@ -26,14 +63,26 @@
   - `messageGetWebxdcInfo` -> `getWebxdcInfo`
 - jsonrpc: changed method signature
   - `miscSendTextMessage(accountId, text, chatId)` -> `miscSendTextMessage(accountId, chatId, text)`
+- jsonrpc: add `SystemMessageType` to `Message`
+- cffi: add missing `DC_INFO_` constants
+- Add DC_EVENT_INCOMING_MSG_BUNCH event #3643
+- Python bindings: Make get_matching() only match the
+  whole event name, e.g. events.get_matching("DC_EVENT_INCOMING_MSG")
+  won't match DC_EVENT_INCOMING_MSG_BUNCH anymore #3643
 
 
+- Rust: Introduce a ContextBuilder #3698
 
 ### Changes
 - allow sender timestamp to be in the future, but not too much
+- Disable the new "Authentication-Results/DKIM checking" security feature
+  until we have tested it a bit #3728
+- refactorings #3706
 
 ### Fixes
 - `dc_search_msgs()` returns unaccepted requests #3694
+- emit "contacts changed" event when the contact is no longer "seen recently" #3703
+- do not allow peerstate reset if DKIM check failed #3731
 
 
 ## 1.98.0

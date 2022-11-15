@@ -494,6 +494,8 @@ impl Imap {
     }
 
     async fn disconnect(&mut self, context: &Context) {
+        info!(context, "disconnecting");
+
         // Close folder if messages should be expunged
         if let Err(err) = self.close_folder(context).await {
             warn!(context, "failed to close folder: {:?}", err);
@@ -901,6 +903,12 @@ impl Imap {
         }
 
         info!(context, "{} mails read from \"{}\".", read_cnt, folder);
+
+        let msg_ids = received_msgs
+            .iter()
+            .flat_map(|m| m.msg_ids.clone())
+            .collect();
+        context.emit_event(EventType::IncomingMsgBunch { msg_ids });
 
         chat::mark_old_messages_as_noticed(context, received_msgs).await?;
 

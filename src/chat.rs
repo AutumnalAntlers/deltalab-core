@@ -1135,8 +1135,8 @@ impl Chat {
     }
 
     /// Returns mailing list address where messages are sent to.
-    pub fn get_mailinglist_addr(&self) -> &str {
-        self.param.get(Param::ListPost).unwrap_or_default()
+    pub fn get_mailinglist_addr(&self) -> Option<&str> {
+        self.param.get(Param::ListPost)
     }
 
     /// Returns profile image path for the chat.
@@ -2444,7 +2444,7 @@ pub async fn get_chat_media(
                 AND hidden=0
               ORDER BY timestamp, id;",
             paramsv![
-                if chat_id.is_none() { 1i32 } else { 0i32 },
+                chat_id.is_none(),
                 chat_id.unwrap_or_else(|| ChatId::new(0)),
                 msg_type,
                 if msg_type2 != Viewtype::Unknown {

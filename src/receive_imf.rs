@@ -1909,7 +1909,7 @@ async fn apply_mailinglist_changes(
             Contact::add_or_lookup(context, "", list_post, Origin::Hidden).await?;
         let mut contact = Contact::load_from_db(context, contact_id).await?;
         if contact.param.get(Param::ListId) != Some(listid) {
-            contact.param.set(Param::ListId, &listid);
+            contact.param.set(Param::ListId, listid);
             contact.update_param(context).await?;
         }
 
@@ -1917,7 +1917,7 @@ async fn apply_mailinglist_changes(
             if list_post != old_list_post {
                 // Apparently the mailing list is using a different List-Post header in each message.
                 // Make the mailing list read-only because we would't know which message the user wants to reply to.
-                chat.param.set(Param::ListPost, "");
+                chat.param.remove(Param::ListPost);
                 chat.update_param(context).await?;
             }
         } else {
@@ -2994,7 +2994,7 @@ mod tests {
         assert!(chat.can_send(&t.ctx).await?);
         assert_eq!(
             chat.get_mailinglist_addr(),
-            "reply+elernshsetushoyseshetihseusaferuhsedtisneu@reply.github.com"
+            Some("reply+elernshsetushoyseshetihseusaferuhsedtisneu@reply.github.com")
         );
         assert_eq!(chat.name, "deltachat/deltachat-core-rust");
         assert_eq!(chat::get_chat_contacts(&t.ctx, chat_id).await?.len(), 1);
@@ -3003,7 +3003,7 @@ mod tests {
 
         let chat = chat::Chat::load_from_db(&t.ctx, chat_id).await?;
         assert!(!chat.can_send(&t.ctx).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "");
+        assert_eq!(chat.get_mailinglist_addr(), None);
 
         let chats = Chatlist::try_load(&t.ctx, 0, None, None).await?;
         assert_eq!(chats.len(), 1);
@@ -3062,7 +3062,7 @@ mod tests {
         let chat = Chat::load_from_db(&t.ctx, chat_id).await.unwrap();
         assert_eq!(chat.name, "delta-dev");
         assert!(chat.can_send(&t).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "delta@codespeak.net");
+        assert_eq!(chat.get_mailinglist_addr(), Some("delta@codespeak.net"));
 
         let msg = get_chat_msg(&t, chat_id, 0, 1).await;
         let contact1 = Contact::load_from_db(&t.ctx, msg.from_id).await.unwrap();
@@ -3154,6 +3154,7 @@ Hello mailinglist!\r\n"
             .unwrap();
 
         receive_imf(&t.ctx, DC_MAILINGLIST, false).await.unwrap();
+        t.evtracker.wait_next_incoming_message().await;
         let chats = Chatlist::try_load(&t.ctx, 0, None, None).await.unwrap();
         assert_eq!(chats.len(), 1);
         let chat_id = chats.get_chat_id(0).unwrap();
@@ -3166,7 +3167,6 @@ Hello mailinglist!\r\n"
         let chats = Chatlist::try_load(&t.ctx, 0, None, None).await.unwrap();
         assert_eq!(chats.len(), 0); // Test that the message disappeared
 
-        t.evtracker.consume_events();
         receive_imf(&t.ctx, DC_MAILINGLIST2, false).await.unwrap();
 
         // Check that no notification is displayed for blocked mailing list message.
@@ -3325,7 +3325,7 @@ Hello mailinglist!\r\n"
         assert_eq!(chat.name, "ola");
         assert_eq!(chat::get_chat_msgs(&t, chat.id, 0).await.unwrap().len(), 1);
         assert!(!chat.can_send(&t).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "");
+        assert_eq!(chat.get_mailinglist_addr(), None);
 
         // receive another message with no sender name but the same address,
         // make sure this lands in the same chat
@@ -3378,7 +3378,7 @@ Hello mailinglist!\r\n"
         );
         assert_eq!(chat.name, "Atlas Obscura");
         assert!(!chat.can_send(&t).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "");
+        assert_eq!(chat.get_mailinglist_addr(), None);
 
         Ok(())
     }
@@ -3407,7 +3407,7 @@ Hello mailinglist!\r\n"
         assert_eq!(chat.grpid, "1234ABCD-123LMNO.mailing.dhl.de");
         assert_eq!(chat.name, "DHL Paket");
         assert!(!chat.can_send(&t).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "");
+        assert_eq!(chat.get_mailinglist_addr(), None);
 
         Ok(())
     }
@@ -3436,7 +3436,7 @@ Hello mailinglist!\r\n"
         assert_eq!(chat.grpid, "dpdde.mxmail.service.dpd.de");
         assert_eq!(chat.name, "DPD");
         assert!(!chat.can_send(&t).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "");
+        assert_eq!(chat.get_mailinglist_addr(), None);
 
         Ok(())
     }
@@ -3457,7 +3457,7 @@ Hello mailinglist!\r\n"
         assert_eq!(chat.grpid, "96540.xt.local");
         assert_eq!(chat.name, "Microsoft Store");
         assert!(!chat.can_send(&t).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "");
+        assert_eq!(chat.get_mailinglist_addr(), None);
 
         receive_imf(
             &t,
@@ -3470,7 +3470,7 @@ Hello mailinglist!\r\n"
         assert_eq!(chat.grpid, "121231234.xt.local");
         assert_eq!(chat.name, "DER SPIEGEL Kundenservice");
         assert!(!chat.can_send(&t).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "");
+        assert_eq!(chat.get_mailinglist_addr(), None);
 
         Ok(())
     }
@@ -3493,7 +3493,7 @@ Hello mailinglist!\r\n"
         assert_eq!(chat.grpid, "51231231231231231231231232869f58.xing.com");
         assert_eq!(chat.name, "xing.com");
         assert!(!chat.can_send(&t).await?);
-        assert_eq!(chat.get_mailinglist_addr(), "");
+        assert_eq!(chat.get_mailinglist_addr(), None);
 
         Ok(())
     }
