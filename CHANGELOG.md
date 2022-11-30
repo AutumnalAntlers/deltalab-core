@@ -3,11 +3,34 @@
 ## Unreleased
 
 ### Changes
+- Refactor: Remove the remaining AsRef<str> #3669
+- Small speedup #3780
+
+### API-Changes
+- Add Python API to send reactions #3762
+- jsonrpc: add message errors to MessageObject #3788
+
+### Fixes
+- Make sure malformed messsages will never block receiving further messages anymore #3771
+- strip leading/trailing whitespace from "Chat-Group-Name{,-Changed}:" headers content #3650
+- Assume all Thunderbird users prefer encryption #3774
+- refactor peerstate handling to ensure no duplicate peerstates #3776
+
+
+## 1.102.0
+
+### Changes
+
+- If an email has multiple From addresses, handle this as if there was
+  no From address, to prevent from forgery attacks. Also, improve
+  handling of emails with invalid From addresses in general #3667
 
 ### API-Changes
 
 ### Fixes
 - fix detection of "All mail", "Trash", "Junk" etc folders. #3760
+- fetch messages sequentially to fix reactions on partially downloaded messages #3688
+- Fix a bug where one malformed message blocked receiving any further messages #3769
 
 
 ## 1.101.0

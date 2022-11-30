@@ -4,9 +4,8 @@ use std::collections::HashSet;
 
 use anyhow::{Context as _, Result};
 use mailparse::ParsedMail;
-use mailparse::SingleInfo;
 
-use crate::aheader::Aheader;
+use crate::aheader::{Aheader, EncryptPreference};
 use crate::authres;
 use crate::authres::handle_authres;
 use crate::contact::addr_cmp;
@@ -56,21 +55,22 @@ pub async fn try_decrypt(
     .await
 }
 
-pub async fn prepare_decryption(
+pub(crate) async fn prepare_decryption(
     context: &Context,
     mail: &ParsedMail<'_>,
-    from: &[SingleInfo],
+    from: &str,
     message_time: i64,
+    is_thunderbird: bool,
 ) -> Result<DecryptionInfo> {
-    let from = if let Some(f) = from.first() {
-        &f.addr
-    } else {
-        return Ok(DecryptionInfo::default());
-    };
-
-    let autocrypt_header = Aheader::from_headers(from, &mail.headers)
+    let mut autocrypt_header = Aheader::from_headers(from, &mail.headers)
         .ok_or_log_msg(context, "Failed to parse Autocrypt header")
         .flatten();
+
+    if is_thunderbird {
+        if let Some(autocrypt_header) = &mut autocrypt_header {
+            autocrypt_header.prefer_encrypt = EncryptPreference::Mutual;
+        }
+    }
 
     let dkim_results = handle_authres(context, mail, from, message_time).await?;
 
@@ -306,7 +306,7 @@ pub(crate) async fn get_autocrypt_peerstate(
             if addr_cmp(&peerstate.addr, from) {
                 if allow_change {
                     peerstate.apply_header(header, message_time);
-                    peerstate.save_to_db(&context.sql, false).await?;
+                    peerstate.save_to_db(&context.sql).await?;
                 } else {
                     info!(
                         context,
@@ -322,7 +322,7 @@ pub(crate) async fn get_autocrypt_peerstate(
             // to the database.
         } else {
             let p = Peerstate::from_header(header, message_time);
-            p.save_to_db(&context.sql, true).await?;
+            p.save_to_db(&context.sql).await?;
             peerstate = Some(p);
         }
     } else {

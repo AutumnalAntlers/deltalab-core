@@ -34,10 +34,9 @@ pub(crate) async fn handle_authres(
     let from_domain = match EmailAddress::new(from) {
         Ok(email) => email.domain,
         Err(e) => {
-            warn!(context, "invalid email {:#}", e);
             // This email is invalid, but don't return an error, we still want to
             // add a stub to the database so that it's not downloaded again
-            return Ok(DkimResults::default());
+            return Err(anyhow::format_err!("invalid email {}: {:#}", from, e));
         }
     };
 
@@ -574,7 +573,7 @@ Authentication-Results: box.hispanilandia.net; spf=pass smtp.mailfrom=adbenitez@
                 file.read_to_end(&mut bytes).await.unwrap();
 
                 let mail = mailparse::parse_mail(&bytes)?;
-                let from = &mimeparser::get_from(&mail.headers)[0].addr;
+                let from = &mimeparser::get_from(&mail.headers).unwrap().addr;
 
                 let res = handle_authres(&t, &mail, from, time()).await?;
                 assert!(res.allow_keychange);
@@ -586,7 +585,7 @@ Authentication-Results: box.hispanilandia.net; spf=pass smtp.mailfrom=adbenitez@
                 file.read_to_end(&mut bytes).await.unwrap();
 
                 let mail = mailparse::parse_mail(&bytes)?;
-                let from = &mimeparser::get_from(&mail.headers)[0].addr;
+                let from = &mimeparser::get_from(&mail.headers).unwrap().addr;
 
                 let res = handle_authres(&t, &mail, from, time()).await?;
                 if !res.allow_keychange {
@@ -637,9 +636,10 @@ Authentication-Results: box.hispanilandia.net; spf=pass smtp.mailfrom=adbenitez@
         // Even if the format is wrong and parsing fails, handle_authres() shouldn't
         // return an Err because this would prevent the message from being added
         // to the database and downloaded again and again
-        let bytes = b"Authentication-Results: dkim=";
+        let bytes = b"From: invalid@from.com
+Authentication-Results: dkim=";
         let mail = mailparse::parse_mail(bytes).unwrap();
-        handle_authres(&t, &mail, "invalidfrom.com", time())
+        handle_authres(&t, &mail, "invalid@rom.com", time())
             .await
             .unwrap();
     }
@@ -681,7 +681,7 @@ Authentication-Results: box.hispanilandia.net; spf=pass smtp.mailfrom=adbenitez@
             .await;
 
         sent.payload
-            .insert_str(0, "Authentication-Results: example.org; dkim=fail");
+            .insert_str(0, "Authentication-Results: example.org; dkim=fail\n");
 
         let received = alice.recv_msg(&sent).await;
 
@@ -717,7 +717,7 @@ Authentication-Results: box.hispanilandia.net; spf=pass smtp.mailfrom=adbenitez@
         loop {
             if let Some(mut sent) = bob2.pop_sent_msg_opt(Duration::ZERO).await {
                 sent.payload
-                    .insert_str(0, "Authentication-Results: example.org; dkim=fail");
+                    .insert_str(0, "Authentication-Results: example.org; dkim=fail\n");
                 alice.recv_msg(&sent).await;
             } else if let Some(sent) = alice.pop_sent_msg_opt(Duration::ZERO).await {
                 bob2.recv_msg(&sent).await;

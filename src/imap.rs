@@ -56,6 +56,8 @@ use session::Session;
 
 use self::select_folder::NewlySelected;
 
+pub(crate) const GENERATED_PREFIX: &str = "GEN_";
+
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq)]
 pub enum ImapActionResult {
     Failed,
@@ -780,8 +782,7 @@ impl Imap {
         let show_emails = ShowEmails::from_i32(context.get_config_int(Config::ShowEmails).await?)
             .unwrap_or_default();
         let download_limit = context.download_limit().await?;
-        let mut uids_fetch_fully = Vec::with_capacity(msgs.len());
-        let mut uids_fetch_partially = Vec::with_capacity(msgs.len());
+        let mut uids_fetch = Vec::<(_, bool /* partially? */)>::with_capacity(msgs.len() + 1);
         let mut uid_message_ids = BTreeMap::new();
         let mut largest_uid_skipped = None;
 
@@ -796,7 +797,7 @@ impl Imap {
             };
 
             // Get the Message-ID or generate a fake one to identify the message in the database.
-            let message_id = prefetch_get_message_id(&headers).unwrap_or_else(create_id);
+            let message_id = prefetch_get_or_create_message_id(&headers);
 
             let target = match target_folder(context, folder, is_spam_folder, &headers).await? {
                 Some(config) => match context.get_config(config).await? {
@@ -840,14 +841,11 @@ impl Imap {
                 .await?
             {
                 match download_limit {
-                    Some(download_limit) => {
-                        if fetch_response.size.unwrap_or_default() > download_limit {
-                            uids_fetch_partially.push(uid);
-                        } else {
-                            uids_fetch_fully.push(uid)
-                        }
-                    }
-                    None => uids_fetch_fully.push(uid),
+                    Some(download_limit) => uids_fetch.push((
+                        uid,
+                        fetch_response.size.unwrap_or_default() > download_limit,
+                    )),
+                    None => uids_fetch.push((uid, false)),
                 }
                 uid_message_ids.insert(uid, message_id);
             } else {
@@ -855,33 +853,37 @@ impl Imap {
             }
         }
 
-        if !uids_fetch_fully.is_empty() || !uids_fetch_partially.is_empty() {
+        if !uids_fetch.is_empty() {
             self.connectivity.set_working(context).await;
         }
 
         // Actually download messages.
-        let (largest_uid_fully_fetched, mut received_msgs) = self
-            .fetch_many_msgs(
-                context,
-                folder,
-                uids_fetch_fully,
-                &uid_message_ids,
-                false,
-                fetch_existing_msgs,
-            )
-            .await?;
-
-        let (largest_uid_partially_fetched, received_msgs_2) = self
-            .fetch_many_msgs(
-                context,
-                folder,
-                uids_fetch_partially,
-                &uid_message_ids,
-                true,
-                fetch_existing_msgs,
-            )
-            .await?;
-        received_msgs.extend(received_msgs_2);
+        let mut largest_uid_fetched: u32 = 0;
+        let mut received_msgs = Vec::with_capacity(uids_fetch.len());
+        let mut uids_fetch_in_batch = Vec::with_capacity(max(uids_fetch.len(), 1));
+        let mut fetch_partially = false;
+        uids_fetch.push((0, !uids_fetch.last().unwrap_or(&(0, false)).1));
+        for (uid, fp) in uids_fetch {
+            if fp != fetch_partially {
+                let (largest_uid_fetched_in_batch, received_msgs_in_batch) = self
+                    .fetch_many_msgs(
+                        context,
+                        folder,
+                        uids_fetch_in_batch.split_off(0),
+                        &uid_message_ids,
+                        fetch_partially,
+                        fetch_existing_msgs,
+                    )
+                    .await?;
+                received_msgs.extend(received_msgs_in_batch);
+                largest_uid_fetched = max(
+                    largest_uid_fetched,
+                    largest_uid_fetched_in_batch.unwrap_or(0),
+                );
+                fetch_partially = fp;
+            }
+            uids_fetch_in_batch.push(uid);
+        }
 
         // determine which uid_next to use to update to
         // receive_imf() returns an `Err` value only on recoverable errors, otherwise it just logs an error.
@@ -889,13 +891,7 @@ impl Imap {
 
         // So: Update the uid_next to the largest uid that did NOT recoverably fail. Not perfect because if there was
         // another message afterwards that succeeded, we will not retry. The upside is that we will not retry an infinite amount of times.
-        let largest_uid_without_errors = max(
-            max(
-                largest_uid_fully_fetched.unwrap_or(0),
-                largest_uid_partially_fetched.unwrap_or(0),
-            ),
-            largest_uid_skipped.unwrap_or(0),
-        );
+        let largest_uid_without_errors = max(largest_uid_fetched, largest_uid_skipped.unwrap_or(0));
         let new_uid_next = largest_uid_without_errors + 1;
 
         if new_uid_next > old_uid_next {
@@ -1284,7 +1280,7 @@ impl Imap {
                 let msg = fetch?;
                 match get_fetch_headers(&msg) {
                     Ok(headers) => {
-                        if let Some(from) = mimeparser::get_from(&headers).first() {
+                        if let Some(from) = mimeparser::get_from(&headers) {
                             if context.is_self_addr(&from.addr).await? {
                                 result.extend(mimeparser::get_recipients(&headers));
                             }
@@ -1368,7 +1364,9 @@ impl Imap {
 
     /// Fetches a list of messages by server UID.
     ///
-    /// Returns the last uid fetch successfully and the info about each downloaded message.
+    /// Returns the last UID fetched successfully and the info about each downloaded message.
+    /// If the message is incorrect or there is a failure to write a message to the database,
+    /// it is skipped and the error is logged.
     pub(crate) async fn fetch_many_msgs(
         &mut self,
         context: &Context,
@@ -1454,7 +1452,7 @@ impl Imap {
                     .context("we checked that message has body right above, but it has vanished")?;
                 let is_seen = msg.flags().any(|flag| flag == Flag::Seen);
 
-                let rfc724_mid = if let Some(rfc724_mid) = &uid_message_ids.get(&server_uid) {
+                let rfc724_mid = if let Some(rfc724_mid) = uid_message_ids.get(&server_uid) {
                     rfc724_mid
                 } else {
                     warn!(
@@ -1462,7 +1460,7 @@ impl Imap {
                         "No Message-ID corresponding to UID {} passed in uid_messsage_ids",
                         server_uid
                     );
-                    ""
+                    continue;
                 };
                 match receive_imf_inner(
                     &context,
@@ -1478,12 +1476,12 @@ impl Imap {
                         if let Some(m) = received_msg {
                             received_msgs.push(m);
                         }
-                        last_uid = Some(server_uid)
                     }
                     Err(err) => {
                         warn!(context, "receive_imf error: {:#}", err);
                     }
                 };
+                last_uid = Some(server_uid)
             }
         }
 
@@ -1758,9 +1756,13 @@ async fn should_move_out_of_spam(
             return Ok(false);
         }
     } else {
+        let from = match mimeparser::get_from(headers) {
+            Some(f) => f,
+            None => return Ok(false),
+        };
         // No chat found.
         let (from_id, blocked_contact, _origin) =
-            from_field_to_contact_id(context, &mimeparser::get_from(headers), true).await?;
+            from_field_to_contact_id(context, &from, true).await?;
         if blocked_contact {
             // Contact is blocked, leave the message in spam.
             return Ok(false);
@@ -1980,13 +1982,15 @@ fn get_fetch_headers(prefetch_msg: &Fetch) -> Result<Vec<mailparse::MailHeader>>
 }
 
 fn prefetch_get_message_id(headers: &[mailparse::MailHeader]) -> Option<String> {
-    if let Some(message_id) = headers.get_header_value(HeaderDef::XMicrosoftOriginalMessageId) {
-        crate::mimeparser::parse_message_id(&message_id).ok()
-    } else if let Some(message_id) = headers.get_header_value(HeaderDef::MessageId) {
-        crate::mimeparser::parse_message_id(&message_id).ok()
-    } else {
-        None
-    }
+    headers
+        .get_header_value(HeaderDef::XMicrosoftOriginalMessageId)
+        .or_else(|| headers.get_header_value(HeaderDef::MessageId))
+        .and_then(|msgid| mimeparser::parse_message_id(&msgid).ok())
+}
+
+pub(crate) fn prefetch_get_or_create_message_id(headers: &[mailparse::MailHeader]) -> String {
+    prefetch_get_message_id(headers)
+        .unwrap_or_else(|| format!("{}{}", GENERATED_PREFIX, create_id()))
 }
 
 /// Returns chat by prefetched headers.
@@ -2043,8 +2047,12 @@ pub(crate) async fn prefetch_should_download(
         .get_header_value(HeaderDef::AutocryptSetupMessage)
         .is_some();
 
+    let from = match mimeparser::get_from(headers) {
+        Some(f) => f,
+        None => return Ok(false),
+    };
     let (_from_id, blocked_contact, origin) =
-        from_field_to_contact_id(context, &mimeparser::get_from(headers), true).await?;
+        from_field_to_contact_id(context, &from, true).await?;
     // prevent_rename=true as this might be a mailing list message and in this case it would be bad if we rename the contact.
     // (prevent_rename is the last argument of from_field_to_contact_id())
 
