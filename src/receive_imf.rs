@@ -580,6 +580,7 @@ async fn add_parts(
                     } else {
                         // In non-protected chats, just mark the sender as overridden. Therefore, the UI will prepend `~`
                         // to the sender's name, indicating to the user that he/she is not part of the group.
+                        let from = &mime_parser.from;
                         let name: &str = from.display_name.as_ref().unwrap_or(&from.addr);
                         for part in mime_parser.parts.iter_mut() {
                             part.param.set(Param::OverrideSenderDisplayname, name);
