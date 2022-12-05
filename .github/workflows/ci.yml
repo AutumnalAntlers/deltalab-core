@@ -17,7 +17,7 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -34,7 +34,7 @@ jobs:
   run_clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
             toolchain: stable
@@ -54,7 +54,7 @@ jobs:
       RUSTDOCFLAGS: -Dwarnings
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Install rust stable toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -77,19 +77,19 @@ jobs:
         include:
           # Currently used Rust version, same as in `rust-toolchain` file.
           - os: ubuntu-latest
-            rust: 1.61.0
+            rust: 1.65.0
             python: 3.9
           - os: windows-latest
-            rust: 1.61.0
+            rust: 1.65.0
             python: false # Python bindings compilation on Windows is not supported.
 
-          # Minimum Supported Rust Version = 1.57.0
+          # Minimum Supported Rust Version = 1.61.0
           #
           # Minimum Supported Python Version = 3.7
           # This is the minimum version for which manylinux Python wheels are
           # built.
           - os: ubuntu-latest
-            rust: 1.57.0
+            rust: 1.61.0
             python: 3.7
     runs-on: ${{ matrix.os }}
     steps:
@@ -146,6 +146,20 @@ jobs:
         DCC_RS_DEV: ${{ github.workspace }}
       working-directory: python
       run: tox -e lint,mypy,doc,py3
+
+    - name: build deltachat-rpc-server
+      if: ${{ matrix.python }}
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: -p deltachat-rpc-server
+
+    - name: run deltachat-rpc-client tests
+      if: ${{ matrix.python }}
+      env:
+        DCC_NEW_TMP_EMAIL: ${{ secrets.DCC_NEW_TMP_EMAIL }}
+      working-directory: deltachat-rpc-client
+      run: tox -e py3
 
     - name: install pypy
       if: ${{ matrix.python }}

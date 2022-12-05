@@ -5,16 +5,19 @@
 ### Changes
 - Refactor: Remove the remaining AsRef<str> #3669
 - Small speedup #3780
+- Log the reason when the message cannot be sent to the chat #3810
 
 ### API-Changes
 - Add Python API to send reactions #3762
 - jsonrpc: add message errors to MessageObject #3788
+- jsonrpc: Add async Python client #3734
 
 ### Fixes
 - Make sure malformed messsages will never block receiving further messages anymore #3771
 - strip leading/trailing whitespace from "Chat-Group-Name{,-Changed}:" headers content #3650
 - Assume all Thunderbird users prefer encryption #3774
 - refactor peerstate handling to ensure no duplicate peerstates #3776
+- Fetch messages in order of their INTERNALDATE (fixes reactions for Gmail f.e.) #3789
 
 
 ## 1.102.0
