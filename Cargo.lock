@@ -123,7 +123,7 @@ dependencies = [
 [[package]]
 name = "async-imap"
 version = "0.6.0"
-source = "git+https://github.com/async-email/async-imap?branch=master#8755b666fcd8991ed4d09864b67aa88a1eb6934f"
+source = "git+https://github.com/async-email/async-imap?branch=master#85ff7a3d9d71a3715354fabf2fc1a8d047b5710e"
 dependencies = [
  "async-channel",
  "async-native-tls",
@@ -867,7 +867,7 @@ checksum = "3ee2393c4a91429dffb4bedf19f4d6abf27d8a732c8ce4980305d782e5426d57"
 
 [[package]]
 name = "deltachat"
-version = "1.102.0"
+version = "1.103.0"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -929,6 +929,7 @@ dependencies = [
  "textwrap",
  "thiserror",
  "tokio",
+ "tokio-io-timeout",
  "tokio-stream",
  "tokio-tar",
  "toml",
@@ -939,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat-jsonrpc"
-version = "1.102.0"
+version = "1.103.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -961,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat-rpc-server"
-version = "1.102.0"
+version = "1.103.0"
 dependencies = [
  "anyhow",
  "deltachat-jsonrpc",
@@ -984,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat_ffi"
-version = "1.102.0"
+version = "1.103.0"
 dependencies = [
  "anyhow",
  "deltachat",
@@ -3548,6 +3549,16 @@ dependencies = [
  "socket2",
  "tokio-macros",
  "winapi",
+]
+
+[[package]]
+name = "tokio-io-timeout"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30b74022ada614a1b4834de765f9bb43877f910cc8ce4be40e89042c9223a8bf"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
