@@ -2,6 +2,9 @@
 //!
 //! This module implements a job queue maintained in the SQLite database
 //! and job types.
+
+#![allow(missing_docs)]
+
 use std::fmt;
 
 use anyhow::{Context as _, Result};
@@ -238,7 +241,7 @@ pub(crate) async fn perform_job(context: &Context, mut connection: Connection<'_
                 info!(
                     context,
                     "job #{} not succeeded on try #{}, retry in {} seconds.",
-                    job.job_id as u32,
+                    job.job_id,
                     tries,
                     time_offset
                 );

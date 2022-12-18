@@ -1,5 +1,7 @@
 //! Contacts module
 
+#![allow(missing_docs)]
+
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::convert::{TryFrom, TryInto};
@@ -853,7 +855,7 @@ impl Contact {
                 paramsv![ContactId::LAST_SPECIAL],
             )
             .await?;
-        Ok(count as usize)
+        Ok(count)
     }
 
     /// Get blocked contacts.

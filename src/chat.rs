@@ -1,5 +1,7 @@
 //! # Chat module.
 
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -780,7 +782,7 @@ impl ChatId {
                 paramsv![self],
             )
             .await?;
-        Ok(count as usize)
+        Ok(count)
     }
 
     pub async fn get_fresh_msg_cnt(self, context: &Context) -> Result<usize> {
@@ -805,7 +807,7 @@ impl ChatId {
                 paramsv![MessageState::InFresh, self],
             )
             .await?;
-        Ok(count as usize)
+        Ok(count)
     }
 
     pub(crate) async fn get_param(self, context: &Context) -> Result<Params> {
@@ -816,6 +818,19 @@ impl ChatId {
         Ok(res
             .map(|s| s.parse().unwrap_or_default())
             .unwrap_or_default())
+    }
+
+    /// Returns true if the chat is not promoted.
+    pub(crate) async fn is_unpromoted(self, context: &Context) -> Result<bool> {
+        let param = self.get_param(context).await?;
+        let unpromoted = param.get_bool(Param::Unpromoted).unwrap_or_default();
+        Ok(unpromoted)
+    }
+
+    /// Returns true if the chat is promoted.
+    pub(crate) async fn is_promoted(self, context: &Context) -> Result<bool> {
+        let promoted = !self.is_unpromoted(context).await?;
+        Ok(promoted)
     }
 
     // Returns true if chat is a saved messages chat.
@@ -1289,7 +1304,7 @@ impl Chat {
     }
 
     pub fn is_unpromoted(&self) -> bool {
-        self.param.get_int(Param::Unpromoted).unwrap_or_default() == 1
+        self.param.get_bool(Param::Unpromoted).unwrap_or_default()
     }
 
     pub fn is_promoted(&self) -> bool {
@@ -1486,7 +1501,7 @@ impl Chat {
                         new_rfc724_mid,
                         self.id,
                         ContactId::SELF,
-                        to_id as i32,
+                        to_id,
                         timestamp,
                         msg.viewtype,
                         msg.state,
@@ -1534,7 +1549,7 @@ impl Chat {
                         new_rfc724_mid,
                         self.id,
                         ContactId::SELF,
-                        to_id as i32,
+                        to_id,
                         timestamp,
                         msg.viewtype,
                         msg.state,
@@ -3299,7 +3314,7 @@ pub(crate) async fn get_chat_cnt(context: &Context) -> Result<usize> {
                 paramsv![],
             )
             .await?;
-        Ok(count as usize)
+        Ok(count)
     } else {
         Ok(0)
     }

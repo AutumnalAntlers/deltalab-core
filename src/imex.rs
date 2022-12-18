@@ -1,5 +1,7 @@
 //! # Import/export module.
 
+#![allow(missing_docs)]
+
 use std::any::Any;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -478,7 +480,8 @@ async fn import_backup(
 /// it can be renamed to dest_path. This guarantees that the backup is complete.
 fn get_next_backup_path(folder: &Path, addr: &str, backup_time: i64) -> Result<(PathBuf, PathBuf, PathBuf)> {
     let folder = PathBuf::from(folder);
-    let stem = chrono::NaiveDateTime::from_timestamp(backup_time, 0)
+    let stem = chrono::NaiveDateTime::from_timestamp_opt(backup_time, 0)
+        .context("can't get next backup path")?
         // Don't change this file name format, in `dc_imex_has_backup` we use string comparison to determine which backup is newer:
         .format(&format!("delta-chat-{}-%Y-%m-%d", &addr).to_string())
         .to_string();
