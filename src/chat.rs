@@ -287,15 +287,29 @@ impl ChatId {
     }
 
     pub async fn set_selfavatar_timestamp(self, context: &Context, timestamp: i64) -> Result<()> {
-        context
-            .sql
-            .execute(
-                "UPDATE contacts
-                SET selfavatar_sent=?
-              WHERE id IN(SELECT contact_id FROM chats_contacts WHERE chat_id=?);",
-                paramsv![timestamp, self],
-            )
-            .await?;
+        let chat = Chat::load_from_db(context, self).await?;
+        if chat.is_mailing_list() {
+            let list_post = chat.get_mailinglist_addr().unwrap_or("");
+            let (contact_id, _) =
+                Contact::add_or_lookup(context, "", list_post, Origin::Hidden).await?;
+            context
+                .sql
+                .execute(
+                    "UPDATE contacts SET selfavatar_sent=? WHERE id=?;",
+                    paramsv![timestamp, contact_id],
+                )
+                .await?;
+        } else {
+            context
+                .sql
+                .execute(
+                    "UPDATE contacts
+                     SET selfavatar_sent=?
+                     WHERE id IN(SELECT contact_id FROM chats_contacts WHERE chat_id=?);",
+                    paramsv![timestamp, self],
+                )
+                .await?;
+        }
         Ok(())
     }
 
@@ -2827,28 +2841,54 @@ pub(crate) async fn shall_attach_selfavatar(context: &Context, chat_id: ChatId) 
     }
 
     let timestamp_some_days_ago = time() - DC_RESEND_USER_AVATAR_DAYS * 24 * 60 * 60;
-    let needs_attach = context
-        .sql
-        .query_map(
-            "SELECT c.selfavatar_sent
-           FROM chats_contacts cc
-           LEFT JOIN contacts c ON c.id=cc.contact_id
-          WHERE cc.chat_id=? AND cc.contact_id!=?;",
-            paramsv![chat_id, ContactId::SELF],
-            |row| Ok(row.get::<_, i64>(0)),
-            |rows| {
-                let mut needs_attach = false;
-                for row in rows {
-                    let row = row?;
-                    let selfavatar_sent = row?;
-                    if selfavatar_sent < timestamp_some_days_ago {
-                        needs_attach = true;
+    let chat = Chat::load_from_db(context, chat_id).await?;
+    let needs_attach = if chat.is_mailing_list() {
+        let list_post = chat.get_mailinglist_addr().unwrap_or("");
+        let (contact_id, _) =
+            Contact::add_or_lookup(context, "", list_post, Origin::Hidden).await?;
+        context
+            .sql
+            .query_map(
+                "SELECT selfavatar_sent FROM contacts WHERE id=?",
+                paramsv![contact_id],
+                |row| Ok(row.get::<_, i64>(0)),
+                |rows| {
+                    let mut needs_attach = false;
+                    for row in rows {
+                        let row = row?;
+                        let selfavatar_sent = row?;
+                        if selfavatar_sent < timestamp_some_days_ago {
+                            needs_attach = true;
+                        }
                     }
-                }
-                Ok(needs_attach)
-            },
-        )
-        .await?;
+                    Ok(needs_attach)
+                },
+            )
+            .await?
+    } else {
+        context
+            .sql
+            .query_map(
+                "SELECT c.selfavatar_sent
+                FROM chats_contacts cc
+                LEFT JOIN contacts c ON c.id=cc.contact_id
+                WHERE cc.chat_id=? AND cc.contact_id!=?;",
+                paramsv![chat_id, ContactId::SELF],
+                |row| Ok(row.get::<_, i64>(0)),
+                |rows| {
+                    let mut needs_attach = false;
+                    for row in rows {
+                        let row = row?;
+                        let selfavatar_sent = row?;
+                        if selfavatar_sent < timestamp_some_days_ago {
+                            needs_attach = true;
+                        }
+                    }
+                    Ok(needs_attach)
+                },
+            )
+            .await?
+    };
     Ok(needs_attach)
 }
 
