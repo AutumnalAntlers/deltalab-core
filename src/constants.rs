@@ -49,7 +49,7 @@ pub enum ShowEmails {
 
 impl Default for ShowEmails {
     fn default() -> Self {
-        ShowEmails::Off // also change Config.ShowEmails props(default) on changes
+        ShowEmails::All // also change Config.ShowEmails props(default) on changes
     }
 }
 

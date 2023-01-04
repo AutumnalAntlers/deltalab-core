@@ -1,6 +1,6 @@
-# Delta Chat Rust
+# DeltaLab Core
 
-> Deltachat-core written in Rust 
+DeltaLab Core is just a fork from [Delta Chat Core](https://github.com/deltachat/deltachat-core-rust) with some customizations to be used in [DeltaLab app](https://github.com/adbenitez/deltalab-android).
 
 [![Rust CI](https://github.com/deltachat/deltachat-core-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/deltachat/deltachat-core-rust/actions/workflows/ci.yml)
 

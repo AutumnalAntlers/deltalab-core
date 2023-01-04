@@ -66,6 +66,9 @@ pub enum Config {
     #[strum(props(default = "1"))]
     MdnsEnabled,
 
+    #[strum(props(default = "1"))]
+    SubjectEnabled,
+
     #[strum(props(default = "0"))]
     SentboxWatch,
 
@@ -79,7 +82,7 @@ pub enum Config {
     #[strum(props(default = "0"))]
     OnlyFetchMvbox,
 
-    #[strum(props(default = "0"))] // also change ShowEmails.default() on changes
+    #[strum(props(default = "2"))] // also change ShowEmails.default() on changes
     ShowEmails,
 
     #[strum(props(default = "0"))] // also change MediaQuality.default() on changes
@@ -168,6 +171,7 @@ pub enum Config {
     QuotaExceeding,
 
     /// address to webrtc instance to use for videochats
+    #[strum(props(default = "https://meet.jit.si"))]
     WebrtcInstance,
 
     /// Timestamp of the last time housekeeping was run
@@ -179,7 +183,7 @@ pub enum Config {
 
     /// Defines the max. size (in bytes) of messages downloaded automatically.
     /// 0 = no limit.
-    #[strum(props(default = "0"))]
+    #[strum(props(default = "163840"))]
     DownloadLimit,
 
     /// Send sync messages, requires `BccSelf` to be set as well.

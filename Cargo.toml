@@ -14,8 +14,10 @@ opt-level = 1
 opt-level = 0
 
 [profile.release]
+strip = true
 lto = true
 panic = 'abort'
+codegen-units = 1
 
 [dependencies]
 deltachat_derive = { path = "./deltachat_derive" }
