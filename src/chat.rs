@@ -796,17 +796,35 @@ impl ChatId {
         // the times are average, no matter if there are fresh messages or not -
         // and have to be multiplied by the number of items shown at once on the chatlist,
         // so savings up to 2 seconds are possible on older devices - newer ones will feel "snappier" :)
-        let count = context
-            .sql
-            .count(
-                "SELECT COUNT(*)
+        let count = if self.is_archived_link() {
+            context
+                .sql
+                .count(
+                    "SELECT COUNT(DISTINCT(m.chat_id))
+                    FROM msgs m
+                    LEFT JOIN chats c ON m.chat_id=c.id
+                    WHERE m.state=10
+                    and m.hidden=0
+                    AND m.chat_id>9
+                    AND c.blocked=0
+                    AND c.archived=1
+                    ",
+                    paramsv![],
+                )
+                .await?
+        } else {
+            context
+                .sql
+                .count(
+                    "SELECT COUNT(*)
                 FROM msgs
                 WHERE state=?
                 AND hidden=0
                 AND chat_id=?;",
-                paramsv![MessageState::InFresh, self],
-            )
-            .await?;
+                    paramsv![MessageState::InFresh, self],
+                )
+                .await?
+        };
         Ok(count)
     }
 
@@ -1125,7 +1143,7 @@ impl Chat {
                         }
                     }
                     Err(err) => {
-                        error!(context, "faild to load contacts for {}: {:?}", chat.id, err);
+                        error!(context, "faild to load contacts for {}: {:#}", chat.id, err);
                     }
                 }
                 chat.name = chat_name;
@@ -1228,6 +1246,10 @@ impl Chat {
     pub async fn get_profile_image(&self, context: &Context) -> Result<Option<PathBuf>> {
         if let Some(image_rel) = self.param.get(Param::ProfileImage) {
             if !image_rel.is_empty() {
+                return Ok(Some(get_abs_path(context, image_rel)));
+            }
+        } else if self.id.is_archived_link() {
+            if let Ok(image_rel) = get_archive_icon(context).await {
                 return Ok(Some(get_abs_path(context, image_rel)));
             }
         } else if self.typ == Chattype::Single {
@@ -1722,6 +1744,21 @@ pub(crate) async fn get_broadcast_icon(context: &Context) -> Result<String> {
     Ok(icon)
 }
 
+pub(crate) async fn get_archive_icon(context: &Context) -> Result<String> {
+    if let Some(icon) = context.sql.get_raw_config("icon-archive").await? {
+        return Ok(icon);
+    }
+
+    let icon = include_bytes!("../assets/icon-archive.png");
+    let blob = BlobObject::create(context, "icon-archive.png", icon).await?;
+    let icon = blob.as_name().to_string();
+    context
+        .sql
+        .set_raw_config("icon-archive", Some(&icon))
+        .await?;
+    Ok(icon)
+}
+
 async fn update_special_chat_name(
     context: &Context,
     contact_id: ContactId,
@@ -2123,7 +2160,7 @@ async fn create_send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<
     let attach_selfavatar = match shall_attach_selfavatar(context, msg.chat_id).await {
         Ok(attach_selfavatar) => attach_selfavatar,
         Err(err) => {
-            warn!(context, "job: cannot get selfavatar-state: {}", err);
+            warn!(context, "job: cannot get selfavatar-state: {:#}", err);
             false
         }
     };
@@ -2185,27 +2222,27 @@ async fn create_send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<
 
     if 0 != rendered_msg.last_added_location_id {
         if let Err(err) = location::set_kml_sent_timestamp(context, msg.chat_id, time()).await {
-            error!(context, "Failed to set kml sent_timestamp: {:?}", err);
+            error!(context, "Failed to set kml sent_timestamp: {:#}", err);
         }
         if !msg.hidden {
             if let Err(err) =
                 location::set_msg_location_id(context, msg.id, rendered_msg.last_added_location_id)
                     .await
             {
-                error!(context, "Failed to set msg_location_id: {:?}", err);
+                error!(context, "Failed to set msg_location_id: {:#}", err);
             }
         }
     }
 
     if let Some(sync_ids) = rendered_msg.sync_ids_to_delete {
         if let Err(err) = context.delete_sync_ids(sync_ids).await {
-            error!(context, "Failed to delete sync ids: {:?}", err);
+            error!(context, "Failed to delete sync ids: {:#}", err);
         }
     }
 
     if attach_selfavatar {
         if let Err(err) = msg.chat_id.set_selfavatar_timestamp(context, time()).await {
-            error!(context, "Failed to set selfavatar timestamp: {:?}", err);
+            error!(context, "Failed to set selfavatar timestamp: {:#}", err);
         }
     }
 
