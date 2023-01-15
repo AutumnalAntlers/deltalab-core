@@ -16,7 +16,7 @@ use crate::chat::{self, Chat, ChatId, ChatIdBlocked, ProtectionStatus};
 use crate::config::Config;
 use crate::constants::{Blocked, Chattype, ShowEmails, DC_CHAT_ID_TRASH};
 use crate::contact::{
-    may_be_valid_addr, normalize_name, Contact, ContactId, Origin, VerifiedStatus,
+    may_be_valid_addr, normalize_name, Contact, ContactAddress, ContactId, Origin, VerifiedStatus,
 };
 use crate::context::Context;
 use crate::download::DownloadState;
@@ -94,9 +94,12 @@ pub(crate) async fn receive_imf_inner(
 ) -> Result<Option<ReceivedMsg>> {
     info!(context, "Receiving message, seen={}...", seen);
 
-    if std::env::var(crate::DCC_MIME_DEBUG).unwrap_or_default() == "2" {
-        info!(context, "receive_imf: incoming message mime-body:");
-        println!("{}", String::from_utf8_lossy(imf_raw));
+    if std::env::var(crate::DCC_MIME_DEBUG).is_ok() {
+        info!(
+            context,
+            "receive_imf: incoming message mime-body:\n{}",
+            String::from_utf8_lossy(imf_raw),
+        );
     }
 
     let mut mime_parser =
@@ -170,7 +173,16 @@ pub(crate) async fn receive_imf_inner(
     // If this is a mailing list email (i.e. list_id_header is some), don't change the displayname because in
     // a mailing list the sender displayname sometimes does not belong to the sender email address.
     let (from_id, _from_id_blocked, incoming_origin) =
-        from_field_to_contact_id(context, &mime_parser.from, prevent_rename).await?;
+        match from_field_to_contact_id(context, &mime_parser.from, prevent_rename).await? {
+            Some(contact_id_res) => contact_id_res,
+            None => {
+                warn!(
+                    context,
+                    "receive_imf: From field does not contain an acceptable address"
+                );
+                return Ok(None);
+            }
+        };
 
     let incoming = from_id != ContactId::SELF;
 
@@ -278,7 +290,7 @@ pub(crate) async fn receive_imf_inner(
                 .update_contacts_timestamp(from_id, Param::AvatarTimestamp, sent_timestamp)
                 .await?
         {
-            match contact::set_profile_image(
+            if let Err(err) = contact::set_profile_image(
                 context,
                 from_id,
                 avatar_action,
@@ -286,15 +298,10 @@ pub(crate) async fn receive_imf_inner(
             )
             .await
             {
-                Ok(()) => {
-                    context.emit_event(EventType::ChatModified(chat_id));
-                }
-                Err(err) => {
-                    warn!(
-                        context,
-                        "receive_imf cannot update profile image: {:#}", err
-                    );
-                }
+                warn!(
+                    context,
+                    "receive_imf cannot update profile image: {:#}", err
+                );
             };
         }
     }
@@ -369,26 +376,39 @@ pub(crate) async fn receive_imf_inner(
 /// Also returns whether it is blocked or not and its origin.
 ///
 /// * `prevent_rename`: passed through to `add_or_lookup_contacts_by_address_list()`
+///
+/// Returns `None` if From field does not contain a valid contact address.
 pub async fn from_field_to_contact_id(
     context: &Context,
     from: &SingleInfo,
     prevent_rename: bool,
-) -> Result<(ContactId, bool, Origin)> {
+) -> Result<Option<(ContactId, bool, Origin)>> {
     let display_name = if prevent_rename {
         Some("")
     } else {
         from.display_name.as_deref()
     };
+    let from_addr = match ContactAddress::new(&from.addr) {
+        Ok(from_addr) => from_addr,
+        Err(err) => {
+            warn!(
+                context,
+                "Cannot create a contact for the given From field: {:#}.", err
+            );
+            return Ok(None);
+        }
+    };
+
     let from_id = add_or_lookup_contact_by_addr(
         context,
         display_name,
-        &from.addr,
+        from_addr,
         Origin::IncomingUnknownFrom,
     )
     .await?;
 
     if from_id == ContactId::SELF {
-        Ok((ContactId::SELF, false, Origin::OutgoingBcc))
+        Ok(Some((ContactId::SELF, false, Origin::OutgoingBcc)))
     } else {
         let mut from_id_blocked = false;
         let mut incoming_origin = Origin::Unknown;
@@ -396,7 +416,7 @@ pub async fn from_field_to_contact_id(
             from_id_blocked = contact.blocked;
             incoming_origin = contact.origin;
         }
-        Ok((from_id, from_id_blocked, incoming_origin))
+        Ok(Some((from_id, from_id_blocked, incoming_origin)))
     }
 }
 
@@ -1933,6 +1953,13 @@ async fn apply_mailinglist_changes(
         }
         let listid = &chat.grpid;
 
+        let list_post = match ContactAddress::new(list_post) {
+            Ok(list_post) => list_post,
+            Err(err) => {
+                warn!(context, "Invalid List-Post: {:#}.", err);
+                return Ok(());
+            }
+        };
         let (contact_id, _) =
             Contact::add_or_lookup(context, "", list_post, Origin::Hidden).await?;
         let mut contact = Contact::load_from_db(context, contact_id).await?;
@@ -1942,7 +1969,7 @@ async fn apply_mailinglist_changes(
         }
 
         if let Some(old_list_post) = chat.param.get(Param::ListPost) {
-            if list_post != old_list_post {
+            if list_post.as_ref() != old_list_post {
                 // Apparently the mailing list is using a different List-Post header in each message.
                 // Make the mailing list read-only because we would't know which message the user wants to reply to.
                 chat.param.remove(Param::ListPost);
@@ -2151,10 +2178,10 @@ async fn check_verified_properties(
                     if let Some(fp) = fp {
                         peerstate.set_verified(
                             PeerstateKeyType::GossipKey,
-                            &fp,
+                            fp,
                             PeerstateVerifiedStatus::BidirectVerified,
                             contact.get_addr().to_owned(),
-                        );
+                        )?;
                         peerstate.save_to_db(&context.sql).await?;
                         is_verified = true;
                     }
@@ -2273,8 +2300,13 @@ async fn add_or_lookup_contacts_by_address_list(
             continue;
         }
         let display_name = info.display_name.as_deref();
-        contact_ids
-            .insert(add_or_lookup_contact_by_addr(context, display_name, addr, origin).await?);
+        if let Ok(addr) = ContactAddress::new(addr) {
+            let contact_id =
+                add_or_lookup_contact_by_addr(context, display_name, addr, origin).await?;
+            contact_ids.insert(contact_id);
+        } else {
+            warn!(context, "Contact with address {:?} cannot exist.", addr);
+        }
     }
 
     Ok(contact_ids.into_iter().collect::<Vec<ContactId>>())
@@ -2284,17 +2316,17 @@ async fn add_or_lookup_contacts_by_address_list(
 async fn add_or_lookup_contact_by_addr(
     context: &Context,
     display_name: Option<&str>,
-    addr: &str,
+    addr: ContactAddress<'_>,
     origin: Origin,
 ) -> Result<ContactId> {
-    if context.is_self_addr(addr).await? {
+    if context.is_self_addr(&addr).await? {
         return Ok(ContactId::SELF);
     }
     let display_name_normalized = display_name.map(normalize_name).unwrap_or_default();
 
-    let (row_id, _modified) =
+    let (contact_id, _modified) =
         Contact::add_or_lookup(context, &display_name_normalized, addr, origin).await?;
-    Ok(row_id)
+    Ok(contact_id)
 }
 
 #[cfg(test)]
