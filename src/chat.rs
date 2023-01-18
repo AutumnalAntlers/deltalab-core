@@ -21,7 +21,7 @@ use crate::constants::{
     Blocked, Chattype, DC_CHAT_ID_ALLDONE_HINT, DC_CHAT_ID_ARCHIVED_LINK, DC_CHAT_ID_LAST_SPECIAL,
     DC_CHAT_ID_TRASH, DC_GCM_ADDDAYMARKER, DC_GCM_INFO_ONLY, DC_RESEND_USER_AVATAR_DAYS,
 };
-use crate::contact::{Contact, ContactId, Origin, VerifiedStatus};
+use crate::contact::{Contact, ContactAddress, ContactId, Origin, VerifiedStatus};
 use crate::context::Context;
 use crate::ephemeral::Timer as EphemeralTimer;
 use crate::events::EventType;
@@ -291,7 +291,13 @@ impl ChatId {
     pub async fn set_selfavatar_timestamp(self, context: &Context, timestamp: i64) -> Result<()> {
         let chat = Chat::load_from_db(context, self).await?;
         if chat.is_mailing_list() {
-            let list_post = chat.get_mailinglist_addr().unwrap_or("");
+            let list_post = match ContactAddress::new(chat.get_mailinglist_addr().unwrap_or("")) {
+                Ok(list_post) => list_post,
+                Err(err) => {
+                    warn!(context, "Invalid List-Post: {:#}.", err);
+                    return Ok(());
+                }
+            };
             let (contact_id, _) =
                 Contact::add_or_lookup(context, "", list_post, Origin::Hidden).await?;
             context
@@ -2925,7 +2931,13 @@ pub(crate) async fn shall_attach_selfavatar(context: &Context, chat_id: ChatId) 
     let timestamp_some_days_ago = time() - DC_RESEND_USER_AVATAR_DAYS * 24 * 60 * 60;
     let chat = Chat::load_from_db(context, chat_id).await?;
     let needs_attach = if chat.is_mailing_list() {
-        let list_post = chat.get_mailinglist_addr().unwrap_or("");
+        let list_post = match ContactAddress::new(chat.get_mailinglist_addr().unwrap_or("")) {
+            Ok(list_post) => list_post,
+            Err(err) => {
+                warn!(context, "Invalid List-Post: {:#}.", err);
+                return Ok(false);
+            }
+        };
         let (contact_id, _) =
             Contact::add_or_lookup(context, "", list_post, Origin::Hidden).await?;
         context
