@@ -23,6 +23,7 @@ use crate::constants::{
 };
 use crate::contact::{Contact, ContactAddress, ContactId, Origin, VerifiedStatus};
 use crate::context::Context;
+use crate::debug_logging::maybe_set_logging_xdc;
 use crate::ephemeral::Timer as EphemeralTimer;
 use crate::events::EventType;
 use crate::html::new_html_mimepart;
@@ -45,7 +46,9 @@ use crate::{location, sql};
 /// An chat item, such as a message or a marker.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ChatItem {
+    /// Chat message stored in the database.
     Message {
+        /// Database ID of the messsage.
         msg_id: MsgId,
     },
 
@@ -282,7 +285,11 @@ impl ChatId {
         let chat_id = ChatId::new(u32::try_from(row_id)?);
         info!(
             context,
-            "Created group/mailinglist '{}' grpid={} as {}", grpname, grpid, chat_id
+            "Created group/mailinglist '{}' grpid={} as {}, blocked={}",
+            grpname,
+            grpid,
+            chat_id,
+            create_blocked,
         );
 
         Ok(chat_id)
@@ -921,11 +928,10 @@ impl ChatId {
     {
         let sql = &context.sql;
         let query = format!(
-            "SELECT {} \
+            "SELECT {fields} \
              FROM msgs WHERE chat_id=? AND state NOT IN (?, ?, ?, ?) AND NOT hidden \
              ORDER BY timestamp DESC, id DESC \
-             LIMIT 1;",
-            fields
+             LIMIT 1;"
         );
         let row = sql
             .query_row_optional(
@@ -1006,9 +1012,9 @@ impl ChatId {
                 })
                 .map(|peerstate| peerstate.prefer_encrypt)
             {
-                Some(EncryptPreference::Mutual) => ret_mutual += &format!("{}\n", addr),
-                Some(EncryptPreference::NoPreference) => ret_nopreference += &format!("{}\n", addr),
-                Some(EncryptPreference::Reset) | None => ret_reset += &format!("{}\n", addr),
+                Some(EncryptPreference::Mutual) => ret_mutual += &format!("{addr}\n"),
+                Some(EncryptPreference::NoPreference) => ret_nopreference += &format!("{addr}\n"),
+                Some(EncryptPreference::Reset) | None => ret_reset += &format!("{addr}\n"),
             };
         }
 
@@ -1139,10 +1145,15 @@ impl rusqlite::types::FromSql for ChatId {
 /// if you want an update, you have to recreate the object.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Chat {
+    /// Database ID.
     pub id: ChatId,
+
+    /// Chat type, e.g. 1:1 chat, group chat, mailing list.
     pub typ: Chattype,
     pub name: String,
     pub visibility: ChatVisibility,
+
+    /// Group ID.
     pub grpid: String,
     pub(crate) blocked: Blocked,
     pub param: Params,
@@ -1179,7 +1190,7 @@ impl Chat {
                 },
             )
             .await
-            .context(format!("Failed loading chat {} from database", chat_id))?;
+            .context(format!("Failed loading chat {chat_id} from database"))?;
 
         if chat.id.is_archived_link() {
             chat.name = stock_str::archived_chats(context).await;
@@ -1212,6 +1223,7 @@ impl Chat {
         Ok(chat)
     }
 
+    /// Returns whether this is the `saved messages` chat
     pub fn is_self_talk(&self) -> bool {
         self.param.exists(Param::Selftalk)
     }
@@ -1221,6 +1233,7 @@ impl Chat {
         self.param.exists(Param::Devicetalk)
     }
 
+    /// Returns true if chat is a mailing list.
     pub fn is_mailing_list(&self) -> bool {
         self.typ == Chattype::Mailinglist
     }
@@ -1497,11 +1510,11 @@ impl Chat {
 
                 if !parent_references.is_empty() && !parent_rfc724_mid.is_empty() {
                     // angle brackets are added by the mimefactory later
-                    new_references = format!("{} {}", parent_references, parent_rfc724_mid);
+                    new_references = format!("{parent_references} {parent_rfc724_mid}");
                 } else if !parent_references.is_empty() {
                     new_references = parent_references.to_string();
                 } else if !parent_in_reply_to.is_empty() && !parent_rfc724_mid.is_empty() {
-                    new_references = format!("{} {}", parent_in_reply_to, parent_rfc724_mid);
+                    new_references = format!("{parent_in_reply_to} {parent_rfc724_mid}");
                 } else if !parent_in_reply_to.is_empty() {
                     new_references = parent_in_reply_to;
                 } else {
@@ -1518,7 +1531,6 @@ impl Chat {
         }
 
         // add independent location to database
-
         if msg.param.exists(Param::SetLatitude) {
             if let Ok(row_id) = context
                 .sql
@@ -1562,7 +1574,6 @@ impl Chat {
         };
 
         // add message to the database
-
         if let Some(update_msg_id) = update_msg_id {
             context
                 .sql
@@ -1644,16 +1655,24 @@ impl Chat {
                 )
                 .await?;
             msg.id = MsgId::new(u32::try_from(raw_id)?);
+
+            maybe_set_logging_xdc(context, msg, self.id).await?;
         }
         context.interrupt_ephemeral_task().await;
         Ok(msg.id)
     }
 }
 
+/// Whether the chat is pinned or archived.
 #[derive(Debug, Copy, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub enum ChatVisibility {
+    /// Chat is neither archived nor pinned.
     Normal,
+
+    /// Chat is archived.
     Archived,
+
+    /// Chat is pinned to the top of the chatlist.
     Pinned,
 }
 
@@ -2050,6 +2069,8 @@ async fn prepare_msg_blob(context: &Context, msg: &mut Message) -> Result<()> {
     Ok(())
 }
 
+/// Prepares a message to be send out
+/// - Checks if chat can be sent to
 async fn prepare_msg_common(
     context: &Context,
     chat_id: ChatId,
@@ -2346,6 +2367,7 @@ pub async fn send_text_msg(
     send_msg(context, chat_id, &mut msg).await
 }
 
+/// Sends invitation to a videochat.
 pub async fn send_videochat_invitation(context: &Context, chat_id: ChatId) -> Result<MsgId> {
     ensure!(
         !chat_id.is_special(),
@@ -2794,7 +2816,7 @@ async fn find_unused_broadcast_list_name(context: &Context) -> Result<String> {
     let base_name = stock_str::broadcast_list(context).await;
     for attempt in 1..1000 {
         let better_name = if attempt > 1 {
-            format!("{} {}", base_name, attempt)
+            format!("{base_name} {attempt}")
         } else {
             base_name.clone()
         };
@@ -3036,10 +3058,16 @@ pub(crate) async fn shall_attach_selfavatar(context: &Context, chat_id: ChatId) 
     Ok(needs_attach)
 }
 
+/// Chat mute duration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MuteDuration {
+    /// Chat is not muted.
     NotMuted,
+
+    /// Chat is muted until the user unmutes the chat.
     Forever,
+
+    /// Chat is muted for a limited period of time.
     Until(SystemTime),
 }
 
@@ -3078,6 +3106,7 @@ impl rusqlite::types::FromSql for MuteDuration {
     }
 }
 
+/// Mutes the chat for a given duration or unmutes it.
 pub async fn set_muted(context: &Context, chat_id: ChatId, duration: MuteDuration) -> Result<()> {
     ensure!(!chat_id.is_special(), "Invalid chat ID");
     context
@@ -3087,11 +3116,12 @@ pub async fn set_muted(context: &Context, chat_id: ChatId, duration: MuteDuratio
             paramsv![duration, chat_id],
         )
         .await
-        .context(format!("Failed to set mute duration for {}", chat_id))?;
+        .context(format!("Failed to set mute duration for {chat_id}"))?;
     context.emit_event(EventType::ChatModified(chat_id));
     Ok(())
 }
 
+/// Removes contact from the chat.
 pub async fn remove_contact_from_chat(
     context: &Context,
     chat_id: ChatId,
@@ -3295,6 +3325,7 @@ pub async fn set_chat_profile_image(
     Ok(())
 }
 
+/// Forwards multiple messages to a chat.
 pub async fn forward_msgs(context: &Context, msg_ids: &[MsgId], chat_id: ChatId) -> Result<()> {
     ensure!(!msg_ids.is_empty(), "empty msgs_ids: nothing to forward");
     ensure!(!chat_id.is_special(), "can not forward to special chat");
@@ -3727,12 +3758,10 @@ pub(crate) async fn update_msg_text_and_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::chatlist::{get_archived_cnt, Chatlist};
     use crate::constants::{DC_GCL_ARCHIVED_ONLY, DC_GCL_NO_SPECIALS};
     use crate::contact::{Contact, ContactAddress};
     use crate::receive_imf::receive_imf;
-
     use crate::test_utils::TestContext;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4520,12 +4549,11 @@ mod tests {
                 format!(
                     "From: bob@example.net\n\
                      To: alice@example.org\n\
-                     Message-ID: <{}@example.org>\n\
+                     Message-ID: <{num}@example.org>\n\
                      Chat-Version: 1.0\n\
                      Date: Sun, 22 Mar 2022 19:37:57 +0000\n\
                      \n\
-                     hello\n",
-                    num
+                     hello\n"
                 )
                 .as_bytes(),
                 false,
@@ -4601,14 +4629,13 @@ mod tests {
             receive_imf(
                 t,
                 format!(
-                    "From: {}@example.net\n\
+                    "From: {name}@example.net\n\
                      To: alice@example.org\n\
-                     Message-ID: <{}@example.org>\n\
+                     Message-ID: <{num}@example.org>\n\
                      Chat-Version: 1.0\n\
                      Date: Sun, 22 Mar 2022 19:37:57 +0000\n\
                      \n\
-                     hello\n",
-                    name, num
+                     hello\n"
                 )
                 .as_bytes(),
                 false,
@@ -4815,7 +4842,7 @@ mod tests {
         let chat_id = ChatId::create_for_contact(&context.ctx, contact1)
             .await
             .unwrap();
-        assert!(!chat_id.is_special(), "chat_id too small {}", chat_id);
+        assert!(!chat_id.is_special(), "chat_id too small {chat_id}");
         let chat = Chat::load_from_db(&context.ctx, chat_id).await.unwrap();
 
         let chat2_id = ChatId::create_for_contact(&context.ctx, contact1)

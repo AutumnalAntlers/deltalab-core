@@ -2,8 +2,19 @@
 
 ## Unreleased
 
+## Changes
+
+## Fixes
+- Fix Securejoin for multiple devices on a joining side #3982
+
+## API-Changes
+
+
+## 1.107.0
+
 ### Changes
 - Pipeline SMTP commands #3924
+- Cache DNS results #3970
 
 ### Fixes
 - Securejoin: Fix adding and handling Autocrypt-Gossip headers #3914
@@ -19,6 +30,8 @@
 - jsonrpc: add verified-by information to `Contact`-Object
 - Remove `attach_selfavatar` config #3951
 
+### Changes
+- add debug logging support for webxdcs #3296
 
 ## 1.106.0
 

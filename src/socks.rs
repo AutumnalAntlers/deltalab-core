@@ -4,17 +4,17 @@ use std::fmt;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::net::connect_tcp;
 use anyhow::Result;
 pub use async_smtp::ServerAddress;
-use tokio::net::TcpStream;
-use tokio_io_timeout::TimeoutStream;
-
-use crate::context::Context;
 use fast_socks5::client::{Config, Socks5Stream};
 use fast_socks5::util::target_addr::ToTargetAddr;
 use fast_socks5::AuthenticationMethod;
 use fast_socks5::Socks5Command;
+use tokio::net::TcpStream;
+use tokio_io_timeout::TimeoutStream;
+
+use crate::context::Context;
+use crate::net::connect_tcp;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Socks5Config {
@@ -56,13 +56,18 @@ impl Socks5Config {
         }
     }
 
+    /// If `load_dns_cache` is true, loads cached DNS resolution results.
+    /// Use this only if the connection is going to be protected with TLS checks.
     pub async fn connect(
         &self,
+        context: &Context,
         target_host: &str,
         target_port: u16,
         timeout_val: Duration,
+        load_dns_cache: bool,
     ) -> Result<Socks5Stream<Pin<Box<TimeoutStream<TcpStream>>>>> {
-        let tcp_stream = connect_tcp((self.host.clone(), self.port), timeout_val).await?;
+        let tcp_stream =
+            connect_tcp(context, &self.host, self.port, timeout_val, load_dns_cache).await?;
 
         let authentication_method = if let Some((username, password)) = self.user_password.as_ref()
         {

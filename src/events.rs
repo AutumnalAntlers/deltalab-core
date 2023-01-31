@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use async_channel::{self as channel, Receiver, Sender, TrySendError};
+use serde::Serialize;
 
 use crate::chat::ChatId;
 use crate::contact::ContactId;
@@ -26,12 +27,14 @@ impl Default for Events {
 }
 
 impl Events {
+    /// Creates a new event channel.
     pub fn new() -> Self {
         let (sender, receiver) = channel::bounded(1_000);
 
         Self { receiver, sender }
     }
 
+    /// Emits an event.
     pub fn emit(&self, event: Event) {
         match self.sender.try_send(event) {
             Ok(()) => {}
@@ -108,7 +111,7 @@ pub struct Event {
     pub typ: EventType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum EventType {
     /// The library-user may write an informational string to the log.
     ///

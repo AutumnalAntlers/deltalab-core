@@ -1,7 +1,5 @@
 //! # Chat list module.
 
-#![allow(missing_docs)]
-
 use anyhow::{ensure, Context as _, Result};
 
 use crate::chat::{update_special_chat_names, Chat, ChatId, ChatVisibility};
@@ -181,7 +179,7 @@ impl Chatlist {
                 warn!(context, "cannot update special chat names: {:?}", err)
             }
 
-            let str_like_cmd = format!("%{}%", query);
+            let str_like_cmd = format!("%{query}%");
             context
                 .sql
                 .query_map(
@@ -341,10 +339,12 @@ impl Chatlist {
         }
     }
 
+    /// Returns chatlist item position for the given chat ID.
     pub fn get_index_for_id(&self, id: ChatId) -> Option<usize> {
         self.ids.iter().position(|(chat_id, _)| chat_id == &id)
     }
 
+    /// An iterator visiting all chatlist items.
     pub fn iter(&self) -> impl Iterator<Item = &(ChatId, Option<MsgId>)> {
         self.ids.iter()
     }
@@ -365,7 +365,6 @@ pub async fn get_archived_cnt(context: &Context) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::chat::{create_group_chat, get_chat_contacts, ProtectionStatus};
     use crate::message::Viewtype;
     use crate::receive_imf::receive_imf;

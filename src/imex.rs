@@ -489,13 +489,13 @@ fn get_next_backup_path(folder: &Path, addr: &str, backup_time: i64) -> Result<(
     // 64 backup files per day should be enough for everyone
     for i in 0..64 {
         let mut tempdbfile = folder.clone();
-        tempdbfile.push(format!("{}-{:02}.db", stem, i));
+        tempdbfile.push(format!("{stem}-{i:02}.db"));
 
         let mut tempfile = folder.clone();
-        tempfile.push(format!("{}-{:02}.tar.part", stem, i));
+        tempfile.push(format!("{stem}-{i:02}.tar.part"));
 
         let mut destfile = folder.clone();
-        destfile.push(format!("{}-{:02}.tar", stem, i));
+        destfile.push(format!("{stem}-{i:02}.tar"));
 
         if !tempdbfile.exists() && !tempfile.exists() && !destfile.exists() {
             return Ok((tempdbfile, tempfile, destfile));
@@ -541,7 +541,7 @@ async fn export_backup(context: &Context, dir: &Path, passphrase: String) -> Res
         .sql
         .export(&temp_db_path, passphrase)
         .await
-        .with_context(|| format!("failed to backup plaintext database to {:?}", temp_db_path))?;
+        .with_context(|| format!("failed to backup plaintext database to {temp_db_path:?}"))?;
 
     let res = export_backup_inner(context, &temp_db_path, &temp_path).await;
 
@@ -701,20 +701,16 @@ async fn export_self_keys(context: &Context, dir: &Path) -> Result<()> {
     for (id, public_key, private_key, is_default) in keys {
         let id = Some(id).filter(|_| is_default != 0);
         if let Ok(key) = public_key {
-            if export_key_to_asc_file(context, dir, id, &key)
-                .await
-                .is_err()
-            {
+            if let Err(err) = export_key_to_asc_file(context, dir, id, &key).await {
+                error!(context, "Failed to export public key: {:#}.", err);
                 export_errors += 1;
             }
         } else {
             export_errors += 1;
         }
         if let Ok(key) = private_key {
-            if export_key_to_asc_file(context, dir, id, &key)
-                .await
-                .is_err()
-            {
+            if let Err(err) = export_key_to_asc_file(context, dir, id, &key).await {
+                error!(context, "Failed to export private key: {:#}.", err);
                 export_errors += 1;
             }
         } else {
@@ -734,7 +730,7 @@ async fn export_key_to_asc_file<T>(
     dir: &Path,
     id: Option<i64>,
     key: &T,
-) -> std::io::Result<()>
+) -> Result<()>
 where
     T: DcKey + Any,
 {
@@ -756,27 +752,26 @@ where
         key.key_id(),
         file_name.display()
     );
-    delete_file(context, &file_name).await;
+
+    // Delete the file if it already exists.
+    delete_file(context, &file_name).await.ok();
 
     let content = key.to_asc(None).into_bytes();
-    let res = write_file(context, &file_name, &content).await;
-    if res.is_err() {
-        error!(context, "Cannot write key to {}", file_name.display());
-    } else {
-        context.emit_event(EventType::ImexFileWritten(file_name));
-    }
-    res
+    write_file(context, &file_name, &content)
+        .await
+        .with_context(|| format!("cannot write key to {}", file_name.display()))?;
+    context.emit_event(EventType::ImexFileWritten(file_name));
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use ::pgp::armor::BlockType;
 
+    use super::*;
     use crate::pgp::{split_armored_data, HEADER_AUTOCRYPT, HEADER_SETUPCODE};
     use crate::stock_str::StockMessage;
     use crate::test_utils::{alice_keypair, TestContext};
-
-    use ::pgp::armor::BlockType;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_render_setup_file() {
@@ -830,7 +825,7 @@ mod tests {
             .await
             .is_ok());
         let blobdir = context.ctx.get_blobdir().to_str().unwrap();
-        let filename = format!("{}/public-key-default.asc", blobdir);
+        let filename = format!("{blobdir}/public-key-default.asc");
         let bytes = tokio::fs::read(&filename).await.unwrap();
 
         assert_eq!(bytes, key.to_asc(None).into_bytes());
@@ -845,7 +840,7 @@ mod tests {
             .await
             .is_ok());
         let blobdir = context.ctx.get_blobdir().to_str().unwrap();
-        let filename = format!("{}/private-key-default.asc", blobdir);
+        let filename = format!("{blobdir}/private-key-default.asc");
         let bytes = tokio::fs::read(&filename).await.unwrap();
 
         assert_eq!(bytes, key.to_asc(None).into_bytes());
@@ -856,12 +851,12 @@ mod tests {
         let context = TestContext::new_alice().await;
         let blobdir = context.ctx.get_blobdir();
         if let Err(err) = imex(&context.ctx, ImexMode::ExportSelfKeys, blobdir, None).await {
-            panic!("got error on export: {:?}", err);
+            panic!("got error on export: {err:#}");
         }
 
         let context2 = TestContext::new_alice().await;
         if let Err(err) = imex(&context2.ctx, ImexMode::ImportSelfKeys, blobdir, None).await {
-            panic!("got error on import: {:?}", err);
+            panic!("got error on import: {err:#}");
         }
     }
 

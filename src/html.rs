@@ -7,12 +7,14 @@
 //! `MsgId.get_html()` will return HTML -
 //! this allows nice quoting, handling linebreaks properly etc.
 
-use futures::future::FutureExt;
 use std::future::Future;
 use std::pin::Pin;
 
 use anyhow::{Context as _, Result};
+use futures::future::FutureExt;
 use lettre_email::mime::{self, Mime};
+use lettre_email::PartBuilder;
+use mailparse::ParsedContentType;
 
 use crate::headerdef::{HeaderDef, HeaderDefMap};
 use crate::message::{Message, MsgId};
@@ -20,8 +22,6 @@ use crate::mimeparser::parse_message_id;
 use crate::param::Param::SendHtml;
 use crate::plaintext::PlainText;
 use crate::{context::Context, message};
-use lettre_email::PartBuilder;
-use mailparse::ParsedContentType;
 
 impl Message {
     /// Check if the message can be retrieved as HTML.
@@ -207,7 +207,7 @@ impl HtmlMsgParser {
                                             self.html = re
                                                 .replace_all(
                                                     &self.html,
-                                                    format!("${{1}}{}${{3}}", replacement).as_str(),
+                                                    format!("${{1}}{replacement}${{3}}").as_str(),
                                                 )
                                                 .as_ref()
                                                 .to_string()
@@ -561,7 +561,7 @@ test some special html-characters as &lt; &gt; and &amp; but also &quot; and &#x
         assert!(msg.text.as_ref().unwrap().contains("foo bar ä ö ü ß"));
         assert!(msg.has_html());
         let html = msg.get_id().get_html(&t).await?.unwrap();
-        println!("{}", html);
+        println!("{html}");
         assert!(html.contains("foo bar ä ö ü ß"));
         Ok(())
     }

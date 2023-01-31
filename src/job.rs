@@ -415,7 +415,7 @@ LIMIT 1;
                     .sql
                     .execute("DELETE FROM jobs WHERE id=?;", paramsv![id])
                     .await
-                    .with_context(|| format!("Failed to delete invalid job {}", id))?;
+                    .with_context(|| format!("Failed to delete invalid job {id}"))?;
             }
         }
     }
@@ -424,7 +424,6 @@ LIMIT 1;
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::test_utils::TestContext;
 
     async fn insert_job(context: &Context, foreign_id: i64, valid: bool) {

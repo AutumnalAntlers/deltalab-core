@@ -377,13 +377,13 @@ impl MimeMessage {
                 }
                 Err(err) => {
                     let msg_body = stock_str::cant_decrypt_msg_body(context).await;
-                    let txt = format!("[{}]", msg_body);
+                    let txt = format!("[{msg_body}]");
 
                     let part = Part {
                         typ: Viewtype::Text,
                         msg_raw: Some(txt.clone()),
                         msg: txt,
-                        error: Some(format!("Decrypting failed: {:#}", err)),
+                        error: Some(format!("Decrypting failed: {err:#}")),
                         ..Default::default()
                     };
                     parser.parts.push(part);
@@ -667,14 +667,14 @@ impl MimeMessage {
             if let Ok(decoded_data) = avatar {
                 let extension = if let Ok(format) = image::guess_format(&decoded_data) {
                     if let Some(ext) = format.extensions_str().first() {
-                        format!(".{}", ext)
+                        format!(".{ext}")
                     } else {
                         String::new()
                     }
                 } else {
                     String::new()
                 };
-                match BlobObject::create(context, &format!("avatar{}", extension), &decoded_data)
+                match BlobObject::create(context, &format!("avatar{extension}"), &decoded_data)
                     .await
                 {
                     Ok(blob) => Some(AvatarAction::Change(blob.as_name().to_string())),
@@ -1300,7 +1300,7 @@ impl MimeMessage {
         self.is_system_message = SystemMessage::Unknown;
         if let Some(part) = self.parts.first_mut() {
             part.typ = Viewtype::Text;
-            part.msg = format!("[{}]", error_msg);
+            part.msg = format!("[{error_msg}]");
             self.parts.truncate(1);
         }
     }
@@ -1879,7 +1879,7 @@ fn get_attachment_filename(
     // If there is no filename, but part is an attachment, guess filename
     if desired_filename.is_none() && ct.disposition == DispositionType::Attachment {
         if let Some(subtype) = mail.ctype.mimetype.split('/').nth(1) {
-            desired_filename = Some(format!("file.{}", subtype,));
+            desired_filename = Some(format!("file.{subtype}",));
         } else {
             bail!(
                 "could not determine attachment filename: {:?}",
@@ -1950,6 +1950,8 @@ where
 mod tests {
     #![allow(clippy::indexing_slicing)]
 
+    use mailparse::ParsedMail;
+
     use super::*;
     use crate::{
         chatlist::Chatlist,
@@ -1959,7 +1961,6 @@ mod tests {
         receive_imf::receive_imf,
         test_utils::TestContext,
     };
-    use mailparse::ParsedMail;
 
     impl AvatarAction {
         pub fn is_change(&self) -> bool {

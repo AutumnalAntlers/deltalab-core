@@ -30,9 +30,10 @@ mod bob;
 mod bobstate;
 mod qrinvite;
 
-use crate::token::Namespace;
 use bobstate::BobState;
 use qrinvite::QrInvite;
+
+use crate::token::Namespace;
 
 pub const NON_ALPHANUMERIC_WITHOUT_DOT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'.');
 
@@ -178,7 +179,7 @@ async fn send_alice_handshake_msg(
 ) -> Result<()> {
     let mut msg = Message {
         viewtype: Viewtype::Text,
-        text: Some(format!("Secure-Join: {}", step)),
+        text: Some(format!("Secure-Join: {step}")),
         hidden: true,
         ..Default::default()
     };
@@ -209,7 +210,7 @@ async fn fingerprint_equals_sender(
     context: &Context,
     fingerprint: &Fingerprint,
     contact_id: ContactId,
-) -> Result<bool, Error> {
+) -> Result<bool> {
     let contact = Contact::load_from_db(context, contact_id).await?;
     let peerstate = match Peerstate::from_addr(context, contact.get_addr()).await {
         Ok(peerstate) => peerstate,
@@ -560,7 +561,9 @@ pub(crate) async fn observe_securejoin_on_other_device(
     info!(context, "observing secure-join message \'{}\'", step);
 
     match step.as_str() {
-        "vg-member-added"
+        "vg-request-with-auth"
+        | "vc-request-with-auth"
+        | "vg-member-added"
         | "vc-contact-confirm"
         | "vg-member-added-received"
         | "vc-contact-confirm-received" => {
@@ -622,7 +625,7 @@ pub(crate) async fn observe_securejoin_on_other_device(
                         context,
                         contact_id,
                         info_chat_id(context, contact_id).await?,
-                        &format!("Could not mark peer as verified at step {}: {}", step, err),
+                        &format!("Could not mark peer as verified at step {step}: {err}"),
                     )
                     .await?;
                     return Ok(HandshakeMessage::Ignore);
@@ -650,7 +653,7 @@ pub(crate) async fn observe_securejoin_on_other_device(
                         context,
                         contact_id,
                         info_chat_id(context, contact_id).await?,
-                        format!("Fingerprint mismatch on observing {}.", step).as_ref(),
+                        format!("Fingerprint mismatch on observing {step}.").as_ref(),
                     )
                     .await?;
                     return Ok(HandshakeMessage::Ignore);
@@ -675,6 +678,12 @@ pub(crate) async fn observe_securejoin_on_other_device(
             if step.as_str() == "vg-member-added" || step.as_str() == "vc-contact-confirm" {
                 inviter_progress!(context, contact_id, 1000);
             }
+            if step.as_str() == "vg-request-with-auth" || step.as_str() == "vc-request-with-auth" {
+                // This actually reflects what happens on the first device (which does the secure
+                // join) and causes a subsequent "vg-member-added" message to create an unblocked
+                // verified group.
+                ChatId::create_for_contact_with_blocked(context, contact_id, Blocked::Not).await?;
+            }
             Ok(if step.as_str() == "vg-member-added" {
                 HandshakeMessage::Propagate
             } else {
@@ -689,7 +698,7 @@ async fn secure_connection_established(
     context: &Context,
     contact_id: ContactId,
     chat_id: ChatId,
-) -> Result<(), Error> {
+) -> Result<()> {
     let contact = Contact::get_by_id(context, contact_id).await?;
     let msg = stock_str::contact_verified(context, &contact).await;
     chat::add_info_msg(context, chat_id, &msg, time()).await?;
@@ -702,7 +711,7 @@ async fn could_not_establish_secure_connection(
     contact_id: ContactId,
     chat_id: ChatId,
     details: &str,
-) -> Result<(), Error> {
+) -> Result<()> {
     let contact = Contact::get_by_id(context, contact_id).await?;
     let msg = stock_str::contact_not_verified(context, &contact).await;
     chat::add_info_msg(context, chat_id, &msg, time()).await?;
@@ -717,7 +726,7 @@ async fn mark_peer_as_verified(
     context: &Context,
     fingerprint: Fingerprint,
     verifier: String,
-) -> Result<(), Error> {
+) -> Result<()> {
     if let Some(ref mut peerstate) = Peerstate::from_fingerprint(context, &fingerprint).await? {
         if let Err(err) = peerstate.set_verified(
             PeerstateKeyType::PublicKey,
@@ -767,7 +776,6 @@ fn encrypted_and_signed(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::chat;
     use crate::chat::ProtectionStatus;
     use crate::chatlist::Chatlist;
@@ -1325,7 +1333,7 @@ mod tests {
                 if let chat::ChatItem::Message { msg_id } = item {
                     let msg = Message::load_from_db(&bob.ctx, msg_id).await.unwrap();
                     let text = msg.get_text().unwrap();
-                    println!("msg {} text: {}", msg_id, text);
+                    println!("msg {msg_id} text: {text}");
                 }
             }
             let mut msg_iter = chat::get_chat_msgs(&bob.ctx, bob_chatid, DC_GCM_ADDDAYMARKER)

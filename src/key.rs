@@ -1,7 +1,5 @@
 //! Cryptographic key module.
 
-#![allow(missing_docs)]
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Cursor;
@@ -11,6 +9,7 @@ use anyhow::{ensure, Context as _, Result};
 use futures::Future;
 use num_traits::FromPrimitive;
 use pgp::composed::Deserializable;
+pub use pgp::composed::{SignedPublicKey, SignedSecretKey};
 use pgp::ser::Serialize;
 use pgp::types::{KeyTrait, SecretKeyTrait};
 use tokio::runtime::Handle;
@@ -18,11 +17,9 @@ use tokio::runtime::Handle;
 use crate::config::Config;
 use crate::constants::KeyGenType;
 use crate::context::Context;
-use crate::tools::{time, EmailAddress};
-
 // Re-export key types
 pub use crate::pgp::KeyPair;
-pub use pgp::composed::{SignedPublicKey, SignedSecretKey};
+use crate::tools::{time, EmailAddress};
 
 /// Convenience trait for working with keys.
 ///
@@ -333,6 +330,7 @@ pub async fn store_self_keypair(
 pub struct Fingerprint(Vec<u8>);
 
 impl Fingerprint {
+    /// Creates new 160-bit (20 bytes) fingerprint.
     pub fn new(v: Vec<u8>) -> Fingerprint {
         debug_assert_eq!(v.len(), 20);
         Fingerprint(v)
@@ -365,7 +363,7 @@ impl fmt::Display for Fingerprint {
             } else if i > 0 && i % 4 == 0 {
                 write!(f, " ")?;
             }
-            write!(f, "{}", c)?;
+            write!(f, "{c}")?;
         }
         Ok(())
     }
@@ -390,11 +388,12 @@ impl std::str::FromStr for Fingerprint {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_utils::{alice_keypair, TestContext};
+    use std::sync::Arc;
 
     use once_cell::sync::Lazy;
-    use std::sync::Arc;
+
+    use super::*;
+    use crate::test_utils::{alice_keypair, TestContext};
 
     static KEYPAIR: Lazy<KeyPair> = Lazy::new(alice_keypair);
 

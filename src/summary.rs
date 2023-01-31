@@ -1,5 +1,8 @@
 //! # Message summary for chatlist.
 
+use std::borrow::Cow;
+use std::fmt;
+
 use crate::chat::Chat;
 use crate::constants::Chattype;
 use crate::contact::{Contact, ContactId};
@@ -9,8 +12,6 @@ use crate::mimeparser::SystemMessage;
 use crate::param::Param;
 use crate::stock_str;
 use crate::tools::truncate;
-use std::borrow::Cow;
-use std::fmt;
 
 /// Prefix displayed before message and separated by ":" in the chatlist.
 #[derive(Debug)]
@@ -28,9 +29,9 @@ pub enum SummaryPrefix {
 impl fmt::Display for SummaryPrefix {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SummaryPrefix::Username(username) => write!(f, "{}", username),
-            SummaryPrefix::Draft(text) => write!(f, "{}", text),
-            SummaryPrefix::Me(text) => write!(f, "{}", text),
+            SummaryPrefix::Username(username) => write!(f, "{username}"),
+            SummaryPrefix::Draft(text) => write!(f, "{text}"),
+            SummaryPrefix::Me(text) => write!(f, "{text}"),
         }
     }
 }
@@ -132,7 +133,7 @@ impl Message {
                     } else {
                         stock_str::file(context).await
                     };
-                    format!("{} – {}", label, file_name)
+                    format!("{label} – {file_name}")
                 }
             }
             Viewtype::VideochatInvitation => {
@@ -166,7 +167,7 @@ impl Message {
             } else if prefix.is_empty() {
                 text.to_string()
             } else {
-                format!("{} – {}", prefix, text)
+                format!("{prefix} – {text}")
             }
         } else {
             prefix

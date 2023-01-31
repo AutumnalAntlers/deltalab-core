@@ -1,12 +1,12 @@
-use super::Imap;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context as _, Result};
 use async_channel::Receiver;
 use async_imap::extensions::idle::IdleResponse;
 use futures_lite::FutureExt;
-use std::time::{Duration, SystemTime};
 
 use super::session::Session;
+use super::Imap;
 use crate::imap::client::IMAP_TIMEOUT;
 use crate::{context::Context, scheduler::InterruptInfo};
 
@@ -99,8 +99,8 @@ impl Session {
 
         let mut session = tokio::time::timeout(Duration::from_secs(15), handle.done())
             .await
-            .with_context(|| format!("{}: IMAP IDLE protocol timed out", folder_name))?
-            .with_context(|| format!("{}: IMAP IDLE failed", folder_name))?;
+            .with_context(|| format!("{folder_name}: IMAP IDLE protocol timed out"))?
+            .with_context(|| format!("{folder_name}: IMAP IDLE failed"))?;
         session.as_mut().set_read_timeout(Some(IMAP_TIMEOUT));
         self.inner = session;
 

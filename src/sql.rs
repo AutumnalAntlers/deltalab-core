@@ -17,9 +17,10 @@ use crate::chat::{add_device_msg, update_device_icon, update_saved_messages_icon
 use crate::config::Config;
 use crate::constants::DC_CHAT_ID_TRASH;
 use crate::context::Context;
+use crate::debug_logging::set_debug_logging_xdc;
 use crate::ephemeral::start_ephemeral_timers;
 use crate::log::LogExt;
-use crate::message::{Message, Viewtype};
+use crate::message::{Message, MsgId, Viewtype};
 use crate::param::{Param, Params};
 use crate::peerstate::{deduplicate_peerstates, Peerstate};
 use crate::stock_str;
@@ -124,7 +125,7 @@ impl Sql {
     pub(crate) async fn export(&self, path: &Path, passphrase: String) -> Result<()> {
         let path_str = path
             .to_str()
-            .with_context(|| format!("path {:?} is not valid unicode", path))?;
+            .with_context(|| format!("path {path:?} is not valid unicode"))?;
         let conn = self.get_conn().await?;
         tokio::task::block_in_place(move || {
             conn.execute(
@@ -147,7 +148,7 @@ impl Sql {
     pub(crate) async fn import(&self, path: &Path, passphrase: String) -> Result<()> {
         let path_str = path
             .to_str()
-            .with_context(|| format!("path {:?} is not valid unicode", path))?;
+            .with_context(|| format!("path {path:?} is not valid unicode"))?;
         let conn = self.get_conn().await?;
 
         tokio::task::block_in_place(move || {
@@ -343,6 +344,15 @@ impl Sql {
         } else {
             info!(context, "Opened database {:?}.", self.dbfile);
             *self.is_encrypted.write().await = Some(passphrase_nonempty);
+
+            // setup debug logging if there is an entry containing its id
+            if let Some(xdc_id) = self
+                .get_raw_config_u32(Config::DebugLogging.as_ref())
+                .await?
+            {
+                set_debug_logging_xdc(context, Some(MsgId::new(xdc_id))).await?;
+            }
+
             Ok(())
         }
     }
@@ -577,7 +587,7 @@ impl Sql {
         let value = self
             .query_get_value("SELECT value FROM config WHERE keyname=?;", paramsv![key])
             .await
-            .context(format!("failed to fetch raw config: {}", key))?;
+            .context(format!("failed to fetch raw config: {key}"))?;
         lock.insert(key.to_string(), value.clone());
         drop(lock);
 
@@ -585,10 +595,16 @@ impl Sql {
     }
 
     pub async fn set_raw_config_int(&self, key: &str, value: i32) -> Result<()> {
-        self.set_raw_config(key, Some(&format!("{}", value))).await
+        self.set_raw_config(key, Some(&format!("{value}"))).await
     }
 
     pub async fn get_raw_config_int(&self, key: &str) -> Result<Option<i32>> {
+        self.get_raw_config(key)
+            .await
+            .map(|s| s.and_then(|s| s.parse().ok()))
+    }
+
+    pub async fn get_raw_config_u32(&self, key: &str) -> Result<Option<u32>> {
         self.get_raw_config(key)
             .await
             .map(|s| s.and_then(|s| s.parse().ok()))
@@ -607,7 +623,7 @@ impl Sql {
     }
 
     pub async fn set_raw_config_int64(&self, key: &str, value: i64) -> Result<()> {
-        self.set_raw_config(key, Some(&format!("{}", value))).await
+        self.set_raw_config(key, Some(&format!("{value}"))).await
     }
 
     pub async fn get_raw_config_int64(&self, key: &str) -> Result<Option<i64>> {
@@ -782,7 +798,14 @@ pub async fn remove_unused_files(context: &Context) -> Result<()> {
                     entry.file_name()
                 );
                 let path = entry.path();
-                delete_file(context, path).await;
+                if let Err(err) = delete_file(context, &path).await {
+                    error!(
+                        context,
+                        "Failed to delete unused file {}: {:#}.",
+                        path.display(),
+                        err
+                    );
+                }
             }
         }
         Err(err) => {
@@ -840,7 +863,7 @@ async fn maybe_add_from_param(
         },
     )
     .await
-    .context(format!("housekeeping: failed to add_from_param {}", query))?;
+    .context(format!("housekeeping: failed to add_from_param {query}"))?;
 
     Ok(())
 }
@@ -874,10 +897,9 @@ pub fn repeat_vars(count: usize) -> String {
 mod tests {
     use async_channel as channel;
 
+    use super::*;
     use crate::config::Config;
     use crate::{test_utils::TestContext, EventType};
-
-    use super::*;
 
     #[test]
     fn test_maybe_add_file() {
@@ -964,8 +986,7 @@ mod tests {
             match event.typ {
                 EventType::Info(s) => assert!(
                     !s.contains("Keeping new unreferenced file"),
-                    "File {} was almost deleted, only reason it was kept is that it was created recently (as the tests don't run for a long time)",
-                    s
+                    "File {s} was almost deleted, only reason it was kept is that it was created recently (as the tests don't run for a long time)"
                 ),
                 EventType::Error(s) => panic!("{}", s),
                 _ => {}

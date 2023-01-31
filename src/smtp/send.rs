@@ -1,12 +1,13 @@
 //! # SMTP message sending
 
-use super::Smtp;
+use std::time::Duration;
+
 use async_smtp::{EmailAddress, Envelope, SendableEmail, Transport};
 
+use super::Smtp;
 use crate::config::Config;
 use crate::context::Context;
 use crate::events::EventType;
-use std::time::Duration;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -46,20 +47,11 @@ impl Smtp {
 
         let message_len_bytes = message.len();
 
-        let mut chunk_size = DEFAULT_MAX_SMTP_RCPT_TO;
-        if let Some(provider) = context.get_configured_provider().await? {
-            if let Some(max_smtp_rcpt_to) = provider.max_smtp_rcpt_to {
-                chunk_size = max_smtp_rcpt_to as usize;
-            }
-        } else if self
-            .from
-            .clone()
-            .unwrap()
-            .to_string()
-            .ends_with("@nauta.cu")
-        {
-            chunk_size = 20;
-        }
+        let chunk_size = context
+            .get_configured_provider()
+            .await?
+            .and_then(|provider| provider.max_smtp_rcpt_to)
+            .map_or(DEFAULT_MAX_SMTP_RCPT_TO, usize::from);
 
         for recipients_chunk in recipients.chunks(chunk_size) {
             let recipients_display = recipients_chunk
@@ -85,8 +77,7 @@ impl Smtp {
                     .map_err(Error::SmtpSend)?;
 
                 context.emit_event(EventType::SmtpMessageSent(format!(
-                    "Message len={} was smtp-sent to {}",
-                    message_len_bytes, recipients_display
+                    "Message len={message_len_bytes} was smtp-sent to {recipients_display}"
                 )));
                 self.last_success = Some(std::time::SystemTime::now());
             } else {

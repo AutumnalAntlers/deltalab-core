@@ -364,7 +364,11 @@ impl<'a> MimeFactory<'a> {
                 if time() > gossiped_timestamp + (2 * 24 * 60 * 60) {
                     Ok(true)
                 } else {
-                    Ok(self.msg.param.get_cmd() == SystemMessage::MemberAddedToGroup)
+                    let cmd = self.msg.param.get_cmd();
+                    // Do gossip in all Securejoin messages not to complicate the code. There's no
+                    // need in gossips in "vg-auth-required" messages f.e., but let them be.
+                    Ok(cmd == SystemMessage::MemberAddedToGroup
+                        || cmd == SystemMessage::SecurejoinMessage)
                 }
             }
             Loaded::Mdn { .. } => Ok(false),
@@ -689,12 +693,9 @@ impl<'a> MimeFactory<'a> {
                 && self.should_do_gossip(context).await?
             {
                 for peerstate in peerstates.iter().filter_map(|(state, _)| state.as_ref()) {
-                    if peerstate.peek_key(min_verified).is_some() {
-                        if let Some(header) = peerstate.render_gossip_header(min_verified) {
-                            message =
-                                message.header(Header::new("Autocrypt-Gossip".into(), header));
-                            is_gossiped = true;
-                        }
+                    if let Some(header) = peerstate.render_gossip_header(min_verified) {
+                        message = message.header(Header::new("Autocrypt-Gossip".into(), header));
+                        is_gossiped = true;
                     }
                 }
             }
@@ -710,7 +711,7 @@ impl<'a> MimeFactory<'a> {
             }
             let message = message.replace_header(Header::new(
                 "Content-Type".to_string(),
-                format!("{} protected-headers=\"v1\";", existing_ct),
+                format!("{existing_ct} protected-headers=\"v1\";"),
             ));
 
             // Set the appropriate Content-Type for the outer message
@@ -1228,7 +1229,7 @@ impl<'a> MimeFactory<'a> {
                 Some(path) => match build_selfavatar_file(context, &path).await {
                     Ok(avatar) => headers.hidden.push(Header::new(
                         "Chat-User-Avatar".into(),
-                        format!("base64:{}", avatar),
+                        format!("base64:{avatar}"),
                     )),
                     Err(err) => warn!(context, "mimefactory: cannot attach selfavatar: {}", err),
                 },
@@ -1464,7 +1465,7 @@ fn render_rfc724_mid(rfc724_mid: &str) -> String {
     if rfc724_mid.chars().next().unwrap_or_default() == '<' {
         rfc724_mid
     } else {
-        format!("<{}>", rfc724_mid)
+        format!("<{rfc724_mid}>")
     }
 }
 
@@ -1503,6 +1504,7 @@ fn maybe_encode_words(words: &str) -> String {
 mod tests {
     use mailparse::{addrparse_header, MailHeaderMap};
 
+    use super::*;
     use crate::chat::ChatId;
     use crate::chat::{
         self, add_contact_to_chat, create_group_chat, remove_contact_from_chat, send_text_msg,
@@ -1513,8 +1515,6 @@ mod tests {
     use crate::mimeparser::MimeMessage;
     use crate::receive_imf::receive_imf;
     use crate::test_utils::{get_chat_msg, TestContext};
-
-    use super::*;
     #[test]
     fn test_render_email_address() {
         let display_name = "ä space";
@@ -1530,7 +1530,7 @@ mod tests {
             Address::new_mailbox_with_name(display_name.to_string(), addr.to_string())
         );
 
-        println!("{}", s);
+        println!("{s}");
 
         assert_eq!(s, "=?utf-8?q?=C3=A4_space?= <x@y.org>");
     }

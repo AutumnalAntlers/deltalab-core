@@ -119,8 +119,13 @@ pub fn split_armored_data(buf: &[u8]) -> Result<(BlockType, BTreeMap<String, Str
 /// keys together as they are one unit.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct KeyPair {
+    /// Email address.
     pub addr: EmailAddress,
+
+    /// Public key.
     pub public: SignedPublicKey,
+
+    /// Secret key.
     pub secret: SignedSecretKey,
 }
 
@@ -131,7 +136,7 @@ pub(crate) fn create_keypair(addr: EmailAddress, keygen_type: KeyGenType) -> Res
         KeyGenType::Ed25519 | KeyGenType::Default => (PgpKeyType::EdDSA, PgpKeyType::ECDH),
     };
 
-    let user_id = format!("<{}>", addr);
+    let user_id = format!("<{addr}>");
     let key_params = SecretKeyParamsBuilder::default()
         .key_type(secret_key_type)
         .can_create_certificates(true)
@@ -382,10 +387,11 @@ pub async fn symm_decrypt<T: std::io::Read + std::io::Seek>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_utils::{alice_keypair, bob_keypair};
     use once_cell::sync::Lazy;
     use tokio::sync::OnceCell;
+
+    use super::*;
+    use crate::test_utils::{alice_keypair, bob_keypair};
 
     #[test]
     fn test_split_armored_data_1() {

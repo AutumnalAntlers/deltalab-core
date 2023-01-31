@@ -961,7 +961,7 @@ impl Contact {
                 };
 
                 let finger_prints = stock_str::finger_prints(context).await;
-                ret += &format!("{}.\n{}:", stock_message, finger_prints);
+                ret += &format!("{stock_message}.\n{finger_prints}:");
 
                 let fingerprint_self = SignedPublicKey::load_self(context)
                     .await?
@@ -1499,7 +1499,7 @@ fn cat_fingerprint(
         && !fingerprint_unverified.is_empty()
         && fingerprint_verified != fingerprint_unverified
     {
-        *ret += &format!("\n\n{} (alternative):\n{}", addr, fingerprint_unverified);
+        *ret += &format!("\n\n{addr} (alternative):\n{fingerprint_unverified}");
     }
 }
 
@@ -1656,7 +1656,6 @@ impl RecentlySeenLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::chat::{get_chat_contacts, send_text_msg, Chat};
     use crate::chatlist::Chatlist;
     use crate::receive_imf::receive_imf;

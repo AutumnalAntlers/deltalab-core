@@ -6,7 +6,7 @@ use std::fmt;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use anyhow::{format_err, Context as _, Error, Result};
+use anyhow::{format_err, Context as _, Result};
 use image::{DynamicImage, ImageFormat};
 use num_traits::FromPrimitive;
 use tokio::io::AsyncWriteExt;
@@ -59,7 +59,7 @@ impl<'a> BlobObject<'a> {
 
         let blob = BlobObject {
             blobdir,
-            name: format!("$BLOBDIR/{}", name),
+            name: format!("$BLOBDIR/{name}"),
         };
         context.emit_event(EventType::NewBlobFile(blob.as_name().to_string()));
         Ok(blob)
@@ -74,7 +74,7 @@ impl<'a> BlobObject<'a> {
     ) -> Result<(String, fs::File)> {
         const MAX_ATTEMPT: u32 = 16;
         let mut attempt = 0;
-        let mut name = format!("{}{}", stem, ext);
+        let mut name = format!("{stem}{ext}");
         loop {
             attempt += 1;
             let path = dir.join(&name);
@@ -124,7 +124,7 @@ impl<'a> BlobObject<'a> {
 
         let blob = BlobObject {
             blobdir: context.get_blobdir(),
-            name: format!("$BLOBDIR/{}", name),
+            name: format!("$BLOBDIR/{name}"),
         };
         context.emit_event(EventType::NewBlobFile(blob.as_name().to_string()));
         Ok(blob)
@@ -184,7 +184,7 @@ impl<'a> BlobObject<'a> {
         }
         Ok(BlobObject {
             blobdir: context.get_blobdir(),
-            name: format!("$BLOBDIR/{}", name),
+            name: format!("$BLOBDIR/{name}"),
         })
     }
 
@@ -285,7 +285,7 @@ impl<'a> BlobObject<'a> {
         if ext.is_empty() {
             (stem, "".to_string())
         } else {
-            (stem, format!(".{}", ext).to_lowercase())
+            (stem, format!(".{ext}").to_lowercase())
             // Return ("file", ".d_point_and_double_ending.tar.gz")
             // which is not perfect but acceptable.
         }
@@ -428,7 +428,7 @@ impl<'a> BlobObject<'a> {
                     blob_abs = blob_abs.with_extension("jpg");
                     let file_name = blob_abs.file_name().context("No avatar file name (???)")?;
                     let file_name = file_name.to_str().context("Filename is no UTF-8 (???)")?;
-                    changed_name = Some(format!("$BLOBDIR/{}", file_name));
+                    changed_name = Some(format!("$BLOBDIR/{file_name}"));
                 }
 
                 if encoded.is_empty() {
@@ -443,7 +443,7 @@ impl<'a> BlobObject<'a> {
         })
     }
 
-    pub fn get_exif_orientation(&self, context: &Context) -> Result<i32, Error> {
+    pub fn get_exif_orientation(&self, context: &Context) -> Result<i32> {
         let file = std::fs::File::open(self.to_abs_path())?;
         let mut bufreader = std::io::BufReader::new(&file);
         let exifreader = exif::Reader::new();
@@ -499,16 +499,14 @@ fn encoded_img_exceeds_bytes(
 
 #[cfg(test)]
 mod tests {
-    use fs::File;
-
     use anyhow::Result;
+    use fs::File;
     use image::{GenericImageView, Pixel};
 
+    use super::*;
     use crate::chat::{self, create_group_chat, ProtectionStatus};
     use crate::message::Message;
     use crate::test_utils::{self, TestContext};
-
-    use super::*;
 
     fn check_image_size(path: impl AsRef<Path>, width: u32, height: u32) -> image::DynamicImage {
         tokio::task::block_in_place(move || {
@@ -598,7 +596,7 @@ mod tests {
                 assert_eq!(fs::read(&foo_path).await.unwrap(), b"hello");
             } else {
                 let name = fname.to_str().unwrap();
-                println!("{}", name);
+                println!("{name}");
                 assert!(name.starts_with("foo"));
                 assert!(name.ends_with(".tar.gz"));
             }

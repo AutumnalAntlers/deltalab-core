@@ -23,13 +23,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context as _;
-use deltachat::qr_code_generator::get_securejoin_qr_svg;
-use num_traits::{FromPrimitive, ToPrimitive};
-use once_cell::sync::Lazy;
-use rand::Rng;
-use tokio::runtime::Runtime;
-use tokio::sync::RwLock;
-
 use deltachat::chat::{ChatId, ChatVisibility, MuteDuration, ProtectionStatus};
 use deltachat::constants::DC_MSG_ID_LAST_SPECIAL;
 use deltachat::contact::{Contact, ContactId, Origin};
@@ -37,20 +30,27 @@ use deltachat::context::Context;
 use deltachat::ephemeral::Timer as EphemeralTimer;
 use deltachat::key::DcKey;
 use deltachat::message::MsgId;
+use deltachat::qr_code_generator::get_securejoin_qr_svg;
 use deltachat::reaction::{get_msg_reactions, send_reaction, Reactions};
 use deltachat::stock_str::StockMessage;
 use deltachat::stock_str::StockStrings;
 use deltachat::webxdc::StatusUpdateSerial;
 use deltachat::*;
 use deltachat::{accounts::Accounts, log::LogExt};
+use num_traits::{FromPrimitive, ToPrimitive};
+use once_cell::sync::Lazy;
+use rand::Rng;
+use tokio::runtime::Runtime;
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 mod dc_array;
 mod lot;
 
 mod string;
-use self::string::*;
 use deltachat::chatlist::Chatlist;
+
+use self::string::*;
 
 // as C lacks a good and portable error handling,
 // in general, the C Interface is forgiving wrt to bad parameters.
@@ -115,7 +115,7 @@ pub unsafe extern "C" fn dc_context_new(
     match ctx {
         Ok(ctx) => Box::into_raw(Box::new(ctx)),
         Err(err) => {
-            eprintln!("failed to create context: {:#}", err);
+            eprintln!("failed to create context: {err:#}");
             ptr::null_mut()
         }
     }
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn dc_context_new_closed(dbfile: *const libc::c_char) -> *
     )) {
         Ok(context) => Box::into_raw(Box::new(context)),
         Err(err) => {
-            eprintln!("failed to create context: {:#}", err);
+            eprintln!("failed to create context: {err:#}");
             ptr::null_mut()
         }
     }
@@ -214,7 +214,7 @@ pub unsafe extern "C" fn dc_set_config(
         if key.starts_with("ui.") {
             ctx.set_ui_config(&key, value.as_deref())
                 .await
-                .with_context(|| format!("Can't set {} to {:?}", key, value))
+                .with_context(|| format!("Can't set {key} to {value:?}"))
                 .log_err(ctx, "dc_set_config() failed")
                 .is_ok() as libc::c_int
         } else {
@@ -222,7 +222,7 @@ pub unsafe extern "C" fn dc_set_config(
                 Ok(key) => ctx
                     .set_config(key, value.as_deref())
                     .await
-                    .with_context(|| format!("Can't set {} to {:?}", key, value))
+                    .with_context(|| format!("Can't set {key} to {value:?}"))
                     .log_err(ctx, "dc_set_config() failed")
                     .is_ok() as libc::c_int,
                 Err(_) => {
@@ -349,7 +349,7 @@ fn render_info(
 ) -> std::result::Result<String, std::fmt::Error> {
     let mut res = String::new();
     for (key, value) in &info {
-        writeln!(&mut res, "{}={}", key, value)?;
+        writeln!(&mut res, "{key}={value}")?;
     }
 
     Ok(res)
@@ -1285,11 +1285,11 @@ pub unsafe extern "C" fn dc_get_chat_media(
     } else {
         Some(ChatId::new(chat_id))
     };
-    let msg_type = from_prim(msg_type).expect(&format!("invalid msg_type = {}", msg_type));
+    let msg_type = from_prim(msg_type).expect(&format!("invalid msg_type = {msg_type}"));
     let or_msg_type2 =
-        from_prim(or_msg_type2).expect(&format!("incorrect or_msg_type2 = {}", or_msg_type2));
+        from_prim(or_msg_type2).expect(&format!("incorrect or_msg_type2 = {or_msg_type2}"));
     let or_msg_type3 =
-        from_prim(or_msg_type3).expect(&format!("incorrect or_msg_type3 = {}", or_msg_type3));
+        from_prim(or_msg_type3).expect(&format!("incorrect or_msg_type3 = {or_msg_type3}"));
 
     block_on(async move {
         Box::into_raw(Box::new(
@@ -1321,11 +1321,11 @@ pub unsafe extern "C" fn dc_get_next_media(
     };
 
     let ctx = &*context;
-    let msg_type = from_prim(msg_type).expect(&format!("invalid msg_type = {}", msg_type));
+    let msg_type = from_prim(msg_type).expect(&format!("invalid msg_type = {msg_type}"));
     let or_msg_type2 =
-        from_prim(or_msg_type2).expect(&format!("incorrect or_msg_type2 = {}", or_msg_type2));
+        from_prim(or_msg_type2).expect(&format!("incorrect or_msg_type2 = {or_msg_type2}"));
     let or_msg_type3 =
-        from_prim(or_msg_type3).expect(&format!("incorrect or_msg_type3 = {}", or_msg_type3));
+        from_prim(or_msg_type3).expect(&format!("incorrect or_msg_type3 = {or_msg_type3}"));
 
     block_on(async move {
         chat::get_next_media(
@@ -2185,7 +2185,7 @@ pub unsafe extern "C" fn dc_imex(
     let what = match imex::ImexMode::from_i32(what_raw) {
         Some(what) => what,
         None => {
-            eprintln!("ignoring invalid argument {} to dc_imex", what_raw);
+            eprintln!("ignoring invalid argument {what_raw} to dc_imex");
             return;
         }
     };
@@ -3073,7 +3073,7 @@ pub unsafe extern "C" fn dc_msg_new(
         return ptr::null_mut();
     }
     let context = &*context;
-    let viewtype = from_prim(viewtype).expect(&format!("invalid viewtype = {}", viewtype));
+    let viewtype = from_prim(viewtype).expect(&format!("invalid viewtype = {viewtype}"));
     let msg = MessageWrapper {
         context,
         message: message::Message::new(viewtype),
@@ -3256,7 +3256,7 @@ pub unsafe extern "C" fn dc_msg_get_webxdc_blob(
             ptr as *mut libc::c_char
         }
         Err(err) => {
-            eprintln!("failed read blob from archive: {}", err);
+            eprintln!("failed read blob from archive: {err}");
             ptr::null_mut()
         }
     }
@@ -4309,7 +4309,7 @@ pub unsafe extern "C" fn dc_accounts_new(
         Ok(accs) => Box::into_raw(Box::new(AccountsWrapper::new(accs))),
         Err(err) => {
             // We are using Anyhow's .context() and to show the inner error, too, we need the {:#}:
-            eprintln!("failed to create accounts: {:#}", err);
+            eprintln!("failed to create accounts: {err:#}");
             ptr::null_mut()
         }
     }
@@ -4377,8 +4377,7 @@ pub unsafe extern "C" fn dc_accounts_select_account(
             Ok(()) => 1,
             Err(err) => {
                 accounts.emit_event(EventType::Error(format!(
-                    "Failed to select account: {:#}",
-                    err
+                    "Failed to select account: {err:#}"
                 )));
                 0
             }
@@ -4400,10 +4399,7 @@ pub unsafe extern "C" fn dc_accounts_add_account(accounts: *mut dc_accounts_t) -
         match accounts.add_account().await {
             Ok(id) => id,
             Err(err) => {
-                accounts.emit_event(EventType::Error(format!(
-                    "Failed to add account: {:#}",
-                    err
-                )));
+                accounts.emit_event(EventType::Error(format!("Failed to add account: {err:#}")));
                 0
             }
         }
@@ -4424,10 +4420,7 @@ pub unsafe extern "C" fn dc_accounts_add_closed_account(accounts: *mut dc_accoun
         match accounts.add_closed_account().await {
             Ok(id) => id,
             Err(err) => {
-                accounts.emit_event(EventType::Error(format!(
-                    "Failed to add account: {:#}",
-                    err
-                )));
+                accounts.emit_event(EventType::Error(format!("Failed to add account: {err:#}")));
                 0
             }
         }
@@ -4452,8 +4445,7 @@ pub unsafe extern "C" fn dc_accounts_remove_account(
             Ok(()) => 1,
             Err(err) => {
                 accounts.emit_event(EventType::Error(format!(
-                    "Failed to remove account: {:#}",
-                    err
+                    "Failed to remove account: {err:#}"
                 )));
                 0
             }
@@ -4483,8 +4475,7 @@ pub unsafe extern "C" fn dc_accounts_migrate_account(
             Ok(id) => id,
             Err(err) => {
                 accounts.emit_event(EventType::Error(format!(
-                    "Failed to migrate account: {:#}",
-                    err
+                    "Failed to migrate account: {err:#}"
                 )));
                 0
             }
@@ -4577,10 +4568,11 @@ pub unsafe extern "C" fn dc_accounts_get_event_emitter(
 
 #[cfg(feature = "jsonrpc")]
 mod jsonrpc {
-    use super::*;
     use deltachat_jsonrpc::api::CommandApi;
     use deltachat_jsonrpc::events::event_to_json_rpc_notification;
     use deltachat_jsonrpc::yerpc::{OutReceiver, RpcClient, RpcSession};
+
+    use super::*;
 
     pub struct dc_jsonrpc_instance_t {
         receiver: OutReceiver,

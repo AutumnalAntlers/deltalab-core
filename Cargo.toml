@@ -1,6 +1,6 @@
 [package]
 name = "deltachat"
-version = "1.106.0"
+version = "1.107.0"
 edition = "2021"
 license = "MPL-2.0"
 rust-version = "1.63"
@@ -22,12 +22,13 @@ codegen-units = 1
 [dependencies]
 deltachat_derive = { path = "./deltachat_derive" }
 format-flowed = { path = "./format-flowed" }
+ratelimit = { path = "./deltachat-ratelimit" }
 
 ansi_term = { version = "0.12.1", optional = true }
 anyhow = "1"
 async-imap = { git = "https://github.com/async-email/async-imap", branch = "master", default-features = false, features = ["runtime-tokio"] }
 async-native-tls = { version = "0.4", default-features = false, features = ["runtime-tokio"] }
-async-smtp = { git = "https://github.com/async-email/async-smtp", branch = "master", default-features = false, features = ["smtp-transport", "socks5", "runtime-tokio"] }
+async-smtp = { version = "0.6", default-features = false, features = ["smtp-transport", "socks5", "runtime-tokio"] }
 trust-dns-resolver = "0.22"
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros"] }
 tokio-tar = { version = "0.3" } # TODO: integrate tokio into async-tar
@@ -84,7 +85,7 @@ async-channel = "1.8.0"
 futures-lite = "1.12.0"
 tokio-stream = { version = "0.1.11", features = ["fs"] }
 tokio-io-timeout = "1.2.0"
-reqwest = { version = "0.11.13", features = ["json"] }
+reqwest = { version = "0.11.14", features = ["json"] }
 async_zip = { version = "0.0.9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
@@ -103,6 +104,7 @@ members = [
   "deltachat_derive",
   "deltachat-jsonrpc",
   "deltachat-rpc-server",
+  "deltachat-ratelimit",
   "format-flowed",
 ]
 
@@ -139,6 +141,10 @@ harness = false
 
 [[bench]]
 name = "get_chatlist"
+harness = false
+
+[[bench]]
+name = "send_events"
 harness = false
 
 [features]

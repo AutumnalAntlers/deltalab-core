@@ -9,20 +9,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{ensure, Result};
+use anyhow::{bail, ensure, Result};
 use async_channel::{self as channel, Receiver, Sender};
+use ratelimit::Ratelimit;
 use tokio::sync::{Mutex, RwLock};
+use tokio::task;
 
 use crate::chat::{get_chat_cnt, ChatId};
 use crate::config::Config;
 use crate::constants::DC_VERSION_STR;
 use crate::contact::Contact;
+use crate::debug_logging::DebugEventLogData;
 use crate::events::{Event, EventEmitter, EventType, Events};
 use crate::key::{DcKey, SignedPublicKey};
 use crate::login_param::LoginParam;
 use crate::message::{self, MessageState, MsgId};
 use crate::quota::QuotaInfo;
-use crate::ratelimit::Ratelimit;
 use crate::scheduler::Scheduler;
 use crate::sql::Sql;
 use crate::stock_str::StockStrings;
@@ -147,24 +149,15 @@ impl ContextBuilder {
     }
 
     /// Opens the [`Context`].
-    pub async fn open(self) -> Result<Context, ContextError> {
+    pub async fn open(self) -> Result<Context> {
         let context =
             Context::new_closed(&self.dbfile, self.id, self.events, self.stock_strings).await?;
         let password = self.password.unwrap_or_default();
         match context.open(password).await? {
             true => Ok(context),
-            false => Err(ContextError::DatabaseEncrypted),
+            false => bail!("database could not be decrypted, incorrect or missing password"),
         }
     }
-}
-
-#[non_exhaustive]
-#[derive(Debug, thiserror::Error)]
-pub enum ContextError {
-    #[error("database could not be decrypted, incorrect or missing password")]
-    DatabaseEncrypted,
-    #[error("failed to open context")]
-    Other(#[from] anyhow::Error),
 }
 
 /// The context for a single DeltaChat account.
@@ -191,6 +184,7 @@ impl Deref for Context {
     }
 }
 
+/// Actual context, expensive to clone.
 #[derive(Debug)]
 pub struct InnerContext {
     /// Blob directory path
@@ -233,6 +227,20 @@ pub struct InnerContext {
     /// If the ui wants to display an error after a failure,
     /// `last_error` should be used to avoid races with the event thread.
     pub(crate) last_error: std::sync::RwLock<String>,
+
+    /// If debug logging is enabled, this contains all neccesary information
+    pub(crate) debug_logging: RwLock<Option<DebugLogging>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct DebugLogging {
+    /// The message containing the logging xdc
+    pub(crate) msg_id: MsgId,
+    /// Handle to the background task responisble for sending
+    pub(crate) loop_handle: task::JoinHandle<()>,
+    /// Channel that log events should be send to
+    /// A background loop will receive and handle them
+    pub(crate) sender: Sender<DebugEventLogData>,
 }
 
 /// The state of ongoing process.
@@ -363,6 +371,7 @@ impl Context {
             creation_time: std::time::SystemTime::now(),
             last_full_folder_scan: Mutex::new(None),
             last_error: std::sync::RwLock::new("".to_string()),
+            debug_logging: RwLock::new(None),
         };
 
         let ctx = Context {
@@ -397,7 +406,9 @@ impl Context {
         // to terminate on receiving the next event and then call stop_io()
         // which will emit the below event(s)
         info!(self, "stopping IO");
-
+        if let Some(debug_logging) = self.debug_logging.read().await.as_ref() {
+            debug_logging.loop_handle.abort();
+        }
         if let Some(scheduler) = self.inner.scheduler.write().await.take() {
             scheduler.stop(self).await;
         }
@@ -434,10 +445,39 @@ impl Context {
 
     /// Emits a single event.
     pub fn emit_event(&self, event: EventType) {
+        if self
+            .debug_logging
+            .try_read()
+            .ok()
+            .map(|inner| inner.is_some())
+            == Some(true)
+        {
+            self.send_log_event(event.clone()).ok();
+        };
         self.events.emit(Event {
             id: self.id,
             typ: event,
         });
+    }
+
+    pub(crate) fn send_log_event(&self, event: EventType) -> anyhow::Result<()> {
+        if let Ok(lock) = self.debug_logging.try_read() {
+            if let Some(DebugLogging {
+                msg_id: xdc_id,
+                sender,
+                ..
+            }) = &*lock
+            {
+                let event_data = DebugEventLogData {
+                    time: time(),
+                    msg_id: *xdc_id,
+                    event,
+                };
+
+                sender.try_send(event_data).ok();
+            }
+        }
+        Ok(())
     }
 
     /// Emits a generic MsgsChanged event (without chat or message id)
@@ -522,6 +562,7 @@ impl Context {
      * UI chat/message related API
      ******************************************************************************/
 
+    /// Returns information about the context as key-value pairs.
     pub async fn get_info(&self) -> Result<BTreeMap<&'static str, String>> {
         let unset = "0";
         let l = LoginParam::load_candidate_params_unchecked(self).await?;
@@ -561,7 +602,7 @@ impl Context {
             .await?;
         let fingerprint_str = match SignedPublicKey::load_self(self).await {
             Ok(key) => key.fingerprint().hex(),
-            Err(err) => format!("<key failure: {}>", err),
+            Err(err) => format!("<key failure: {err}>"),
         };
 
         let sentbox_watch = self.get_config_int(Config::SentboxWatch).await?;
@@ -618,7 +659,7 @@ impl Context {
         res.insert("used_account_settings", l2.to_string());
 
         if let Some(server_id) = &*self.server_id.read().await {
-            res.insert("imap_server_id", format!("{:?}", server_id));
+            res.insert("imap_server_id", format!("{server_id:?}"));
         }
 
         res.insert("secondary_addrs", secondary_addrs);
@@ -710,6 +751,11 @@ impl Context {
                 .unwrap_or_default(),
         );
 
+        res.insert(
+            "debug_logging",
+            self.get_config_int(Config::DebugLogging).await?.to_string(),
+        );
+
         let elapsed = self.creation_time.elapsed();
         res.insert("uptime", duration_to_str(elapsed.unwrap_or_default()));
 
@@ -764,7 +810,7 @@ impl Context {
         if real_query.is_empty() {
             return Ok(Vec::new());
         }
-        let str_like_in_text = format!("%{}%", real_query);
+        let str_like_in_text = format!("%{real_query}%");
 
         let do_query = |query, params| {
             self.sql.query_map(
@@ -827,16 +873,19 @@ impl Context {
         Ok(list)
     }
 
+    /// Returns true if given folder name is the name of the inbox.
     pub async fn is_inbox(&self, folder_name: &str) -> Result<bool> {
         let inbox = self.get_config(Config::ConfiguredInboxFolder).await?;
         Ok(inbox.as_deref() == Some(folder_name))
     }
 
+    /// Returns true if given folder name is the name of the "sent" folder.
     pub async fn is_sentbox(&self, folder_name: &str) -> Result<bool> {
         let sentbox = self.get_config(Config::ConfiguredSentboxFolder).await?;
         Ok(sentbox.as_deref() == Some(folder_name))
     }
 
+    /// Returns true if given folder name is the name of the "Delta Chat" folder.
     pub async fn is_mvbox(&self, folder_name: &str) -> Result<bool> {
         let mvbox = self.get_config(Config::ConfiguredMvboxFolder).await?;
         Ok(mvbox.as_deref() == Some(folder_name))
@@ -857,14 +906,20 @@ impl Context {
     }
 }
 
+/// Returns core version as a string.
 pub fn get_version_str() -> &'static str {
     &DC_VERSION_STR
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
 
+    use anyhow::Context as _;
+    use strum::IntoEnumIterator;
+    use tempfile::tempdir;
+
+    use super::*;
     use crate::chat::{
         get_chat_contacts, get_chat_msgs, send_msg, set_muted, Chat, ChatId, MuteDuration,
     };
@@ -875,10 +930,6 @@ mod tests {
     use crate::receive_imf::receive_imf;
     use crate::test_utils::TestContext;
     use crate::tools::create_outgoing_rfc724_mid;
-    use anyhow::Context as _;
-    use std::time::Duration;
-    use strum::IntoEnumIterator;
-    use tempfile::tempdir;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_wrong_db() -> Result<()> {
@@ -915,7 +966,7 @@ mod tests {
             contact.get_addr(),
             create_outgoing_rfc724_mid(None, contact.get_addr())
         );
-        println!("{}", msg);
+        println!("{msg}");
         receive_imf(t, msg.as_bytes(), false).await.unwrap();
     }
 
@@ -1142,8 +1193,7 @@ mod tests {
             {
                 assert!(
                     info.contains_key(&*key),
-                    "'{}' missing in get_info() output",
-                    key
+                    "'{key}' missing in get_info() output"
                 );
             }
         }

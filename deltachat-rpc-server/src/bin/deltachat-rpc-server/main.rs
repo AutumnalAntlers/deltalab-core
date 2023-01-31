@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
         while let Some(message) = out_receiver.next().await {
             let message = serde_json::to_string(&message)?;
             log::trace!("RPC send {}", message);
-            println!("{}", message);
+            println!("{message}");
         }
         Ok(())
     });

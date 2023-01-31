@@ -129,6 +129,7 @@ pub enum Param {
     ProfileImage = b'i',
 
     /// For Chats
+    /// Signals wheter the chat is the `saved messages` chat
     Selftalk = b'K',
 
     /// For Chats: On sending a new message we set the subject to `Re: <last subject>`.
@@ -390,7 +391,7 @@ impl Params {
 
     /// Set the given paramter to the passed in `i32`.
     pub fn set_int(&mut self, key: Param, value: i32) -> &mut Self {
-        self.set(key, format!("{}", value));
+        self.set(key, format!("{value}"));
         self
     }
 
@@ -402,7 +403,7 @@ impl Params {
 
     /// Set the given parameter to the passed in `f64` .
     pub fn set_float(&mut self, key: Param, value: f64) -> &mut Self {
-        self.set(key, format!("{}", value));
+        self.set(key, format!("{value}"));
         self
     }
 }
@@ -435,14 +436,13 @@ impl<'a> ParamsFile<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::path::Path;
     use std::str::FromStr;
 
     use anyhow::Result;
     use tokio::fs;
 
+    use super::*;
     use crate::test_utils::TestContext;
 
     #[test]

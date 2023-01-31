@@ -18,14 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add rustfmt
-      - name: Cache rust cargo artifacts
-        uses: swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
 
   run_clippy:
@@ -39,10 +31,7 @@ jobs:
             override: true
       - name: Cache rust cargo artifacts
         uses: swatinem/rust-cache@v2
-      - uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --workspace --tests --examples --benches --features repl -- -D warnings
+      - run: cargo clippy --workspace --tests --examples --benches --features repl -- -D warnings
 
   docs:
     name: Rust doc comments
@@ -144,7 +133,7 @@ jobs:
       env:
         DCC_NEW_TMP_EMAIL: ${{ secrets.DCC_NEW_TMP_EMAIL }}
       working-directory: deltachat-rpc-client
-      run: tox -e py3
+      run: tox -e py3,lint
 
     - name: install pypy
       if: ${{ matrix.python }}

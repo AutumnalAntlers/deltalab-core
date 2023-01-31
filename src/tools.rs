@@ -9,10 +9,9 @@ use std::fmt;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
-
 use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Error, Result};
+use anyhow::{bail, Context as _, Result};
 use chrono::{Local, TimeZone};
 use futures::{StreamExt, TryStreamExt};
 use mailparse::dateparse;
@@ -96,7 +95,7 @@ pub(crate) fn truncate_by_lines(
         };
 
         if let Some(truncated_text) = text {
-            (format!("{}{}", truncated_text, DC_ELLIPSIS), true)
+            (format!("{truncated_text}{DC_ELLIPSIS}"), true)
         } else {
             // In case of indexing/slicing error, we return an error
             // message as a preview and add HTML version. This should
@@ -129,7 +128,7 @@ pub fn duration_to_str(duration: Duration) -> String {
     let h = secs / 3600;
     let m = (secs % 3600) / 60;
     let s = (secs % 3600) % 60;
-    format!("{}h {}m {}s", h, m, s)
+    format!("{h}h {m}m {s}s")
 }
 
 pub(crate) fn gm2local_offset() -> i64 {
@@ -345,7 +344,7 @@ pub fn get_filesuffix_lc(path_filename: &str) -> Option<String> {
 }
 
 /// Returns the `(width, height)` of the given image buffer.
-pub fn get_filemeta(buf: &[u8]) -> Result<(u32, u32), Error> {
+pub fn get_filemeta(buf: &[u8]) -> Result<(u32, u32)> {
     let image = image::io::Reader::new(Cursor::new(buf)).with_guessed_format()?;
     let dimensions = image.into_dimensions()?;
     Ok(dimensions)
@@ -370,49 +369,39 @@ pub(crate) async fn get_filebytes(context: &Context, path: impl AsRef<Path>) -> 
     Ok(meta.len())
 }
 
-pub(crate) async fn delete_file(context: &Context, path: impl AsRef<Path>) -> bool {
-    let path_abs = get_abs_path(context, &path);
+pub(crate) async fn delete_file(context: &Context, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let path_abs = get_abs_path(context, path);
     if !path_abs.exists() {
-        return false;
+        bail!("path {} does not exist", path_abs.display());
     }
     if !path_abs.is_file() {
-        warn!(
-            context,
-            "refusing to delete non-file \"{}\".",
-            path.as_ref().display()
-        );
-        return false;
+        warn!(context, "refusing to delete non-file {}.", path.display());
+        bail!("not a file: \"{}\"", path.display());
     }
 
-    let dpath = format!("{}", path.as_ref().to_string_lossy());
-    match fs::remove_file(path_abs).await {
-        Ok(_) => {
-            context.emit_event(EventType::DeletedBlobFile(dpath));
-            true
-        }
-        Err(err) => {
-            warn!(context, "Cannot delete \"{}\": {}", dpath, err);
-            false
-        }
-    }
+    let dpath = format!("{}", path.to_string_lossy());
+    fs::remove_file(path_abs)
+        .await
+        .with_context(|| format!("cannot delete {dpath:?}"))?;
+    context.emit_event(EventType::DeletedBlobFile(dpath));
+    Ok(())
 }
 
-pub async fn delete_files_in_dir(context: &Context, path: impl AsRef<Path>) {
-    match tokio::fs::read_dir(path).await {
-        Ok(read_dir) => {
-            let mut read_dir = tokio_stream::wrappers::ReadDirStream::new(read_dir);
-            while let Some(entry) = read_dir.next().await {
-                match entry {
-                    Ok(file) => {
-                        delete_file(context, file.file_name()).await;
-                    }
-                    Err(e) => warn!(context, "Could not read file to delete: {}", e),
-                }
+pub async fn delete_files_in_dir(context: &Context, path: impl AsRef<Path>) -> Result<()> {
+    let read_dir = tokio::fs::read_dir(path)
+        .await
+        .context("could not read dir to delete")?;
+    let mut read_dir = tokio_stream::wrappers::ReadDirStream::new(read_dir);
+    while let Some(entry) = read_dir.next().await {
+        match entry {
+            Ok(file) => {
+                delete_file(context, file.file_name()).await?;
             }
+            Err(e) => warn!(context, "Could not read file to delete: {}", e),
         }
-
-        Err(e) => warn!(context, "Could not read dir to delete: {}", e),
     }
+    Ok(())
 }
 
 pub(crate) async fn create_folder(
@@ -457,7 +446,7 @@ pub(crate) async fn write_file(
     })
 }
 
-pub async fn read_file<P: AsRef<Path>>(context: &Context, path: P) -> Result<Vec<u8>, Error> {
+pub async fn read_file(context: &Context, path: impl AsRef<Path>) -> Result<Vec<u8>> {
     let path_abs = get_abs_path(context, &path);
 
     match fs::read(&path_abs).await {
@@ -474,7 +463,7 @@ pub async fn read_file<P: AsRef<Path>>(context: &Context, path: P) -> Result<Vec
     }
 }
 
-pub async fn open_file<P: AsRef<Path>>(context: &Context, path: P) -> Result<fs::File, Error> {
+pub async fn open_file(context: &Context, path: impl AsRef<Path>) -> Result<fs::File> {
     let path_abs = get_abs_path(context, &path);
 
     match fs::File::open(&path_abs).await {
@@ -494,7 +483,7 @@ pub async fn open_file<P: AsRef<Path>>(context: &Context, path: P) -> Result<fs:
 pub fn open_file_std<P: AsRef<std::path::Path>>(
     context: &Context,
     path: P,
-) -> Result<std::fs::File, Error> {
+) -> Result<std::fs::File> {
     let p: PathBuf = path.as_ref().into();
     let path_abs = get_abs_path(context, p);
 
@@ -512,6 +501,7 @@ pub fn open_file_std<P: AsRef<std::path::Path>>(
     }
 }
 
+/// Reads directory and returns a vector of directory entries.
 pub async fn read_dir(path: &Path) -> Result<Vec<fs::DirEntry>> {
     let res = tokio_stream::wrappers::ReadDirStream::new(fs::read_dir(path).await?)
         .try_collect()
@@ -703,7 +693,6 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
 
     use super::*;
-
     use crate::{
         config::Config, message::get_msg_info, receive_imf::receive_imf, test_utils::TestContext,
     };
@@ -1008,10 +997,11 @@ DKIM Results: Passed=true, Works=true, Allow_Keychange=true";
         assert_eq!(EmailAddress::new("@d.tt").is_ok(), false);
     }
 
-    use crate::chatlist::Chatlist;
-    use crate::{chat, test_utils};
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     use proptest::prelude::*;
+
+    use crate::chatlist::Chatlist;
+    use crate::{chat, test_utils};
 
     proptest! {
         #[test]
@@ -1047,7 +1037,9 @@ DKIM Results: Passed=true, Works=true, Allow_Keychange=true";
             };
         }
 
-        assert!(!delete_file(context, "$BLOBDIR/lkqwjelqkwlje").await);
+        assert!(delete_file(context, "$BLOBDIR/lkqwjelqkwlje")
+            .await
+            .is_err());
         assert!(write_file(context, "$BLOBDIR/foobar", b"content")
             .await
             .is_ok());
@@ -1063,17 +1055,19 @@ DKIM Results: Passed=true, Works=true, Allow_Keychange=true";
 
         assert!(file_exist!(context, &abs_path));
 
-        assert!(delete_file(context, "$BLOBDIR/foobar").await);
+        assert!(delete_file(context, "$BLOBDIR/foobar").await.is_ok());
         assert!(create_folder(context, "$BLOBDIR/foobar-folder")
             .await
             .is_ok());
         assert!(file_exist!(context, "$BLOBDIR/foobar-folder"));
-        assert!(!delete_file(context, "$BLOBDIR/foobar-folder").await);
+        assert!(delete_file(context, "$BLOBDIR/foobar-folder")
+            .await
+            .is_err());
 
         let fn0 = "$BLOBDIR/data.data";
         assert!(write_file(context, &fn0, b"content").await.is_ok());
 
-        assert!(delete_file(context, &fn0).await);
+        assert!(delete_file(context, &fn0).await.is_ok());
         assert!(!file_exist!(context, &fn0));
     }
 
@@ -1289,5 +1283,17 @@ DKIM Results: Passed=true, Works=true, Allow_Keychange=true";
         let device_chat_id = chats.get_chat_id(0).unwrap();
         let msgs = chat::get_chat_msgs(&t, device_chat_id, 0).await.unwrap();
         assert_eq!(msgs.len(), test_len + 1);
+    }
+
+    #[test]
+    fn test_remove_subject_prefix() {
+        assert_eq!(remove_subject_prefix("Subject"), "Subject");
+        assert_eq!(
+            remove_subject_prefix("Chat: Re: Subject"),
+            "Chat: Re: Subject"
+        );
+        assert_eq!(remove_subject_prefix("Re: Subject"), "Subject");
+        assert_eq!(remove_subject_prefix("Fwd: Subject"), "Subject");
+        assert_eq!(remove_subject_prefix("Fw: Subject"), "Subject");
     }
 }

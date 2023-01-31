@@ -15,7 +15,6 @@
     clippy::unused_async
 )]
 #![allow(
-    clippy::uninlined_format_args,
     clippy::match_bool,
     clippy::mixed_read_write_in_expression,
     clippy::bool_assert_comparison,
@@ -103,9 +102,9 @@ mod color;
 pub mod html;
 mod net;
 pub mod plaintext;
-mod ratelimit;
 pub mod summary;
 
+mod debug_logging;
 pub mod receive_imf;
 pub mod tools;
 

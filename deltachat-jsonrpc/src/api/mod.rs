@@ -1,4 +1,9 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::{collections::HashMap, str::FromStr};
+
 use anyhow::{anyhow, bail, ensure, Context, Result};
+pub use deltachat::accounts::Accounts;
 use deltachat::{
     chat::{
         self, add_contact_to_chat, forward_msgs, get_chat_media, get_chat_msgs, marknoticed_chat,
@@ -23,21 +28,14 @@ use deltachat::{
     webxdc::StatusUpdateSerial,
 };
 use sanitize_filename::is_sanitized;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::{collections::HashMap, str::FromStr};
 use tokio::{fs, sync::RwLock};
 use walkdir::WalkDir;
 use yerpc::rpc;
 
-pub use deltachat::accounts::Accounts;
-
 pub mod events;
 pub mod types;
 
-use crate::api::types::chat_list::{get_chat_list_item_by_id, ChatListItemFetchResult};
-use crate::api::types::qr::QrObject;
-
+use num_traits::FromPrimitive;
 use types::account::Account;
 use types::chat::FullChat;
 use types::chat_list::ChatListEntry;
@@ -53,8 +51,8 @@ use self::types::{
         JSONRPCMessageListItem, MessageNotificationInfo, MessageSearchResult, MessageViewtype,
     },
 };
-
-use num_traits::FromPrimitive;
+use crate::api::types::chat_list::{get_chat_list_item_by_id, ChatListItemFetchResult};
+use crate::api::types::qr::QrObject;
 
 #[derive(Clone, Debug)]
 pub struct CommandApi {
@@ -136,7 +134,7 @@ impl CommandApi {
             if let Some(ctx) = context_option {
                 accounts.push(Account::from_context(&ctx, id).await?)
             } else {
-                println!("account with id {} doesn't exist anymore", id);
+                println!("account with id {id} doesn't exist anymore");
             }
         }
         Ok(accounts)
@@ -244,7 +242,7 @@ impl CommandApi {
         for (key, value) in config.into_iter() {
             set_config(&ctx, &key, value.as_deref())
                 .await
-                .with_context(|| format!("Can't set {} to {:?}", key, value))?;
+                .with_context(|| format!("Can't set {key} to {value:?}"))?;
         }
         Ok(())
     }
@@ -461,7 +459,7 @@ impl CommandApi {
                     Ok(res) => res,
                     Err(err) => ChatListItemFetchResult::Error {
                         id: entry.0,
-                        error: format!("{:?}", err),
+                        error: format!("{err:?}"),
                     },
                 },
             );
@@ -1716,7 +1714,7 @@ async fn set_config(
         ctx.set_ui_config(key, value).await?;
     } else {
         ctx.set_config(
-            Config::from_str(key).with_context(|| format!("unknown key {:?}", key))?,
+            Config::from_str(key).with_context(|| format!("unknown key {key:?}"))?,
             value,
         )
         .await?;
@@ -1738,7 +1736,7 @@ async fn get_config(
     if key.starts_with("ui.") {
         ctx.get_ui_config(key).await
     } else {
-        ctx.get_config(Config::from_str(key).with_context(|| format!("unknown key {:?}", key))?)
+        ctx.get_config(Config::from_str(key).with_context(|| format!("unknown key {key:?}"))?)
             .await
     }
 }
