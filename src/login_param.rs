@@ -1,6 +1,5 @@
 //! # Login parameters.
 
-use std::borrow::Cow;
 use std::fmt;
 
 use anyhow::{ensure, Result};
@@ -264,7 +263,7 @@ impl fmt::Display for LoginParam {
 
         write!(
             f,
-            "{} imap:{}:{}:{}:{}:cert_{}:{} smtp:{}:{}:{}:{}:cert_{}:{}",
+            "{} imap:{}:{}:{}:{}:{}:cert_{}:{} smtp:{}:{}:{}:{}:{}:cert_{}:{}",
             unset_empty(&self.addr),
             unset_empty(&self.imap.user),
             if !self.imap.password.is_empty() {
@@ -274,6 +273,7 @@ impl fmt::Display for LoginParam {
             },
             unset_empty(&self.imap.server),
             self.imap.port,
+            self.imap.security,
             self.imap.certificate_checks,
             if self.imap.oauth2 {
                 "OAUTH2"
@@ -288,6 +288,7 @@ impl fmt::Display for LoginParam {
             },
             unset_empty(&self.smtp.server),
             self.smtp.port,
+            self.smtp.security,
             self.smtp.certificate_checks,
             if self.smtp.oauth2 {
                 "OAUTH2"
@@ -298,12 +299,11 @@ impl fmt::Display for LoginParam {
     }
 }
 
-#[allow(clippy::ptr_arg)]
-fn unset_empty(s: &String) -> Cow<String> {
+fn unset_empty(s: &str) -> &str {
     if s.is_empty() {
-        Cow::Owned("unset".to_string())
+        "unset"
     } else {
-        Cow::Borrowed(s)
+        s
     }
 }
 
