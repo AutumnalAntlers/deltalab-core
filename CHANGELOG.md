@@ -5,11 +5,20 @@
 ## Changes
 - Use read/write timeouts instead of per-command timeouts for SMTP #3985
 - Cache DNS results for SMTP connections #3985
+- Prefer TLS over STARTTLS during autoconfiguration #4021
+- Use SOCKS5 configuration for HTTP requests #4017
 
 ## Fixes
 - Fix Securejoin for multiple devices on a joining side #3982
+- python: handle NULL value returned from `dc_get_msg()` #4020
+  Account.`get_message_by_id` may return `None` in this case.
 
 ## API-Changes
+- Remove bitflags from `get_chat_msgs()` interface #4022
+  C interface is not changed.
+  Rust and JSON-RPC API have `flags` integer argument
+  replaced with two boolean flags `info_only` and `add_daymarker`.
+- jsonrpc: add API to check if the message is sent by a bot #3877
 
 
 ## 1.107.1
