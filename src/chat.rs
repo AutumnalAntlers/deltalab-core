@@ -1,7 +1,5 @@
 //! # Chat module.
 
-#![allow(missing_docs)]
-
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -60,6 +58,7 @@ pub enum ChatItem {
     },
 }
 
+/// Chat protection status.
 #[derive(
     Debug,
     Display,
@@ -77,7 +76,12 @@ pub enum ChatItem {
 )]
 #[repr(u32)]
 pub enum ProtectionStatus {
+    /// Chat is not protected.
     Unprotected = 0,
+
+    /// Chat is protected.
+    ///
+    /// All members of the chat must be verified.
     Protected = 1,
 }
 
@@ -700,6 +704,7 @@ impl ChatId {
         Ok(())
     }
 
+    /// Returns ID of the draft message, if there is one.
     async fn get_draft_msg_id(self, context: &Context) -> Result<Option<MsgId>> {
         let msg_id: Option<MsgId> = context
             .sql
@@ -711,6 +716,7 @@ impl ChatId {
         Ok(msg_id)
     }
 
+    /// Returns draft message, if there is one.
     pub async fn get_draft(self, context: &Context) -> Result<Option<Message>> {
         if self.is_special() {
             return Ok(None);
@@ -724,7 +730,7 @@ impl ChatId {
         }
     }
 
-    /// Delete draft message in specified chat, if there is one.
+    /// Deletes draft message, if there is one.
     ///
     /// Returns `true`, if message was deleted, `false` otherwise.
     async fn maybe_delete_draft(self, context: &Context) -> Result<bool> {
@@ -846,6 +852,7 @@ impl ChatId {
         Ok(count)
     }
 
+    /// Returns the number of fresh messages in the chat.
     pub async fn get_fresh_msg_cnt(self, context: &Context) -> Result<usize> {
         // this function is typically used to show a badge counter beside _each_ chatlist item.
         // to make this as fast as possible, esp. on older devices, we added an combined index over the rows used for querying.
@@ -912,7 +919,7 @@ impl ChatId {
         Ok(promoted)
     }
 
-    // Returns true if chat is a saved messages chat.
+    /// Returns true if chat is a saved messages chat.
     pub async fn is_self_talk(self, context: &Context) -> Result<bool> {
         Ok(self.get_param(context).await?.exists(Param::Selftalk))
     }
@@ -1150,15 +1157,29 @@ pub struct Chat {
 
     /// Chat type, e.g. 1:1 chat, group chat, mailing list.
     pub typ: Chattype,
+
+    /// Chat name.
     pub name: String,
+
+    /// Whether the chat is archived or pinned.
     pub visibility: ChatVisibility,
 
     /// Group ID.
     pub grpid: String,
+
+    /// Whether the chat is blocked, unblocked or a contact request.
     pub(crate) blocked: Blocked,
+
+    /// Additional chat parameters stored in the database.
     pub param: Params,
+
+    /// If location streaming is enabled in the chat.
     is_sending_locations: bool,
+
+    /// Duration of the chat being muted.
     pub mute_duration: MuteDuration,
+
+    /// If the chat is protected (verified).
     protected: ProtectionStatus,
 }
 
@@ -1278,7 +1299,7 @@ impl Chat {
         }
     }
 
-    pub async fn update_param(&mut self, context: &Context) -> Result<()> {
+    pub(crate) async fn update_param(&mut self, context: &Context) -> Result<()> {
         context
             .sql
             .execute(
@@ -1334,6 +1355,10 @@ impl Chat {
         Ok(None)
     }
 
+    /// Returns chat avatar color.
+    ///
+    /// For 1:1 chats, the color is calculated from the contact's address.
+    /// For group chats the color is calculated from the chat name.
     pub async fn get_color(&self, context: &Context) -> Result<u32> {
         let mut color = 0;
 
@@ -1380,6 +1405,7 @@ impl Chat {
         })
     }
 
+    /// Returns chat visibilitiy, e.g. whether it is archived or pinned.
     pub fn get_visibility(&self) -> ChatVisibility {
         self.visibility
     }
@@ -1392,10 +1418,12 @@ impl Chat {
         self.blocked == Blocked::Request
     }
 
+    /// Returns true if the chat is not promoted.
     pub fn is_unpromoted(&self) -> bool {
         self.param.get_bool(Param::Unpromoted).unwrap_or_default()
     }
 
+    /// Returns true if the chat is promoted.
     pub fn is_promoted(&self) -> bool {
         !self.is_unpromoted()
     }
@@ -1410,6 +1438,7 @@ impl Chat {
         self.is_sending_locations
     }
 
+    /// Returns true if the chat is currently muted.
     pub fn is_muted(&self) -> bool {
         match self.mute_duration {
             MuteDuration::NotMuted => false,
@@ -1994,6 +2023,7 @@ impl ChatIdBlocked {
     }
 }
 
+/// Prepares a message for sending.
 pub async fn prepare_msg(context: &Context, chat_id: ChatId, msg: &mut Message) -> Result<MsgId> {
     ensure!(
         !chat_id.is_special(),
@@ -2351,6 +2381,9 @@ async fn create_send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<
     Ok(Some(row_id))
 }
 
+/// Sends a text message to the given chat.
+///
+/// Returns database ID of the sent message.
 pub async fn send_text_msg(
     context: &Context,
     chat_id: ChatId,
@@ -2683,6 +2716,12 @@ pub(crate) async fn mark_old_messages_as_noticed(
     Ok(())
 }
 
+/// Returns all database message IDs of the given types.
+///
+/// If `chat_id` is None, return messages from any chat.
+///
+/// `Viewtype::Unknown` can be used for `msg_type2` and `msg_type3`
+/// if less than 3 viewtypes are requested.
 pub async fn get_chat_media(
     context: &Context,
     chat_id: Option<ChatId>,
@@ -2726,10 +2765,14 @@ pub async fn get_chat_media(
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(i32)]
 pub enum Direction {
+    /// Search forward.
     Forward = 1,
+
+    /// Search backward.
     Backward = -1,
 }
 
+/// Searches next/previous message based on the given message and list of types.
 pub async fn get_next_media(
     context: &Context,
     curr_msg_id: MsgId,
@@ -3452,6 +3495,9 @@ pub async fn forward_msgs(context: &Context, msg_ids: &[MsgId], chat_id: ChatId)
     Ok(())
 }
 
+/// Resends given messages with the same Message-ID.
+///
+/// This is primarily intended to make existing webxdcs available to new chat members.
 pub async fn resend_msgs(context: &Context, msg_ids: &[MsgId]) -> Result<()> {
     let mut chat_id = None;
     let mut msgs: Vec<Message> = Vec::new();
@@ -3650,6 +3696,7 @@ pub async fn add_device_msg(
     add_device_msg_with_importance(context, label, msg, false).await
 }
 
+/// Returns true if device message with a given label was ever added to the device chat.
 pub async fn was_device_msg_ever_added(context: &Context, label: &str) -> Result<bool> {
     ensure!(!label.is_empty(), "empty label");
     let exists = context
@@ -5138,9 +5185,6 @@ mod tests {
         let alice = TestContext::new_alice().await;
         let bob = TestContext::new_bob().await;
 
-        alice.set_config(Config::ShowEmails, Some("2")).await?;
-        bob.set_config(Config::ShowEmails, Some("2")).await?;
-
         let alice_bob_contact = alice.add_or_lookup_contact(&bob).await;
         let contact_id = alice_bob_contact.id;
         let alice_chat_id = create_group_chat(&alice, ProtectionStatus::Unprotected, "grp").await?;
@@ -5324,12 +5368,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_classic_email_chat() -> Result<()> {
         let alice = TestContext::new_alice().await;
-
-        // Alice enables receiving classic emails.
-        alice
-            .set_config(Config::ShowEmails, Some("2"))
-            .await
-            .unwrap();
 
         // Alice receives a classic (non-chat) message from Bob.
         receive_imf(
