@@ -3,11 +3,19 @@
 ## Unreleased
 
 ### Changes
+- deltachat-rpc-client: use `dataclass` for `Account`, `Chat`, `Contact` and `Message` #4042
+- python: mark bindings as supporting typing according to PEP 561 #4045
+- retry filesystem operations during account migration #4043
 
 ### Fixes
+- deltachat-rpc-server: do not block stdin while processing the request. #4041
+  deltachat-rpc-server now reads the next request as soon as previous request handler is spawned.
+- enable `auto_vacuum` on all SQL connections #2955
 
 ### API-Changes
+
 - Remove `MimeMessage::from_bytes()` public interface. #4033
+- BREAKING Types: jsonrpc: `get_messages` now returns a map with `MessageLoadResult` instead of failing completely if one of the requested messages could not be loaded. #4038
 
 
 ## 1.108.0
