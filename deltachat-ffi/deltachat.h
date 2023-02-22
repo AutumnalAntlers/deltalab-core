@@ -4328,6 +4328,18 @@ void            dc_msg_set_html               (dc_msg_t* msg, const char* html);
 
 
 /**
+ * Sets the email's subject. If it's empty, a default subject
+ * will be used (e.g. `Message from Alice` or `Re: <last subject>`).
+ * This does not alter any information in the database.
+ *
+ * @memberof dc_msg_t
+ * @param msg The message object.
+ * @param subject The new subject.
+ */
+void            dc_msg_set_subject            (dc_msg_t* msg, const char* subject);
+
+
+/**
  * Set different sender name for a message.
  * This overrides the name set by the dc_set_config()-option `displayname`.
  *
@@ -5671,7 +5683,7 @@ void dc_event_unref(dc_event_t* event);
 #define DC_EVENT_INCOMING_MSG             2005
 
 /**
- * Downloading a bunch of messages just finished. This is an experimental
+ * Downloading a bunch of messages just finished. This is an
  * event to allow the UI to only show one notification per message bunch,
  * instead of cluttering the user with many notifications.
  * For each of the msg_ids, an additional #DC_EVENT_INCOMING_MSG event was emitted before.

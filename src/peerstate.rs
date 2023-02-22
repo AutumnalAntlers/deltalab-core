@@ -186,7 +186,7 @@ impl Peerstate {
     async fn from_stmt(
         context: &Context,
         query: &str,
-        params: impl rusqlite::Params,
+        params: impl rusqlite::Params + Send,
     ) -> Result<Option<Peerstate>> {
         let peerstate = context
             .sql
@@ -688,6 +688,10 @@ pub(crate) async fn maybe_do_aeap_transition(
     Ok(())
 }
 
+/// Type of the peerstate change.
+///
+/// Changes to the peerstate are notified to the user via a message
+/// explaining the happened change.
 enum PeerstateChange {
     /// The contact's public key fingerprint changed, likely because
     /// the contact uses a new device and didn't transfer their key.

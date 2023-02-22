@@ -3,19 +3,43 @@
 ## Unreleased
 
 ### Changes
+- use transaction in `Contact::add_or_lookup()` #4059
+- Organize the connection pool as a stack rather than a queue to ensure that
+  connection page cache is reused more often.
+  This speeds up tests by 28%, real usage will have lower speedup. #4065
+- Use transaction in `update_blocked_mailinglist_contacts`. #4058
+- Remove `Sql.get_conn()` interface in favor of `.call()` and `.transaction()`. #4055
+- Updated provider database.
+- Disable DKIM-Checks again #4076
+
+### Fixes
+- Start SQL transactions with IMMEDIATE behaviour rather than default DEFERRED one. #4063
+- Fix a problem with Gmail where (auto-)deleted messages would get archived instead of deleted.
+  Move them to the Trash folder for Gmail which auto-deletes trashed messages in 30 days #3972
+- Clear config cache after backup import. This bug sometimes resulted in the import to seemingly work at first. #4067
+
+### API-Changes
+
+
+## 1.109.0
+
+### Changes
 - deltachat-rpc-client: use `dataclass` for `Account`, `Chat`, `Contact` and `Message` #4042
-- python: mark bindings as supporting typing according to PEP 561 #4045
-- retry filesystem operations during account migration #4043
 
 ### Fixes
 - deltachat-rpc-server: do not block stdin while processing the request. #4041
   deltachat-rpc-server now reads the next request as soon as previous request handler is spawned.
-- enable `auto_vacuum` on all SQL connections #2955
+- Enable `auto_vacuum` on all SQL connections. #2955
+- Replace `r2d2` connection pool with an own implementation. #4050 #4053 #4043 #4061
+  This change improves reliability
+  by closing all database connections immediately when the context is closed.
 
 ### API-Changes
 
 - Remove `MimeMessage::from_bytes()` public interface. #4033
 - BREAKING Types: jsonrpc: `get_messages` now returns a map with `MessageLoadResult` instead of failing completely if one of the requested messages could not be loaded. #4038
+- Add `dc_msg_set_subject()`. C-FFI #4057
+- Mark python bindings as supporting typing according to PEP 561 #4045
 
 
 ## 1.108.0

@@ -1,7 +1,5 @@
 //! # MIME message parsing module.
 
-#![allow(missing_docs)]
-
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -130,11 +128,13 @@ pub(crate) enum MailinglistType {
     None,
 }
 
+/// System message type.
 #[derive(
     Debug, Default, Display, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive, ToSql, FromSql,
 )]
 #[repr(u32)]
 pub enum SystemMessage {
+    /// Unknown type of system message.
     #[default]
     Unknown = 0,
 
@@ -152,8 +152,14 @@ pub enum SystemMessage {
 
     /// Autocrypt Setup Message.
     AutocryptSetupMessage = 6,
+
+    /// Secure-join message.
     SecurejoinMessage = 7,
+
+    /// Location streaming is enabled.
     LocationStreamingEnabled = 8,
+
+    /// Location-only message.
     LocationOnly = 9,
 
     /// Chat ephemeral message timer is changed.
@@ -336,7 +342,8 @@ impl MimeMessage {
             if let (Some(peerstate), Ok(mail)) = (&mut decryption_info.peerstate, mail) {
                 if message_time > peerstate.last_seen_autocrypt
                     && mail.ctype.mimetype != "multipart/report"
-                    && decryption_info.dkim_results.allow_keychange
+                // Disallowing keychanges is disabled for now:
+                // && decryption_info.dkim_results.allow_keychange
                 {
                     peerstate.degrade_encryption(message_time);
                 }
@@ -407,11 +414,12 @@ impl MimeMessage {
         parser.heuristically_parse_ndn(context).await;
         parser.parse_headers(context).await?;
 
-        if !parser.decryption_info.dkim_results.allow_keychange {
-            for part in parser.parts.iter_mut() {
-                part.error = Some("Seems like DKIM failed, this either is an attack or (more likely) a bug in Authentication-Results checking. Please tell us about this at https://support.delta.chat.".to_string());
-            }
-        }
+        // Disallowing keychanges is disabled for now
+        // if !decryption_info.dkim_results.allow_keychange {
+        //     for part in parser.parts.iter_mut() {
+        //         part.error = Some("Seems like DKIM failed, this either is an attack or (more likely) a bug in Authentication-Results checking. Please tell us about this at https://support.delta.chat.".to_string());
+        //     }
+        // }
 
         if parser.is_mime_modified {
             parser.decoded_data = mail_raw;
@@ -1790,6 +1798,8 @@ pub struct Part {
 
     /// Size of the MIME part in bytes.
     pub bytes: usize,
+
+    /// Parameters.
     pub param: Params,
 
     /// Attachment filename.

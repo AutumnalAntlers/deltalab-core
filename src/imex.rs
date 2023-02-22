@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use ::pgp::types::KeyTrait;
-use anyhow::{bail, ensure, format_err, Context as _, Result};
+use anyhow::{bail, ensure, format_err, Context as _, Error, Result};
 use futures::StreamExt;
 use futures_lite::FutureExt;
 use rand::{thread_rng, Rng};
@@ -427,8 +427,6 @@ async fn import_backup(
         context.get_dbfile().display()
     );
 
-    context.sql.config_cache.write().await.clear();
-
     let mut archive = Archive::new(backup_file);
 
     let mut entries = archive.entries()?;
@@ -508,6 +506,9 @@ fn get_next_backup_path(folder: &Path, addr: &str, backup_time: i64) -> Result<(
     bail!("could not create backup file, disk full?");
 }
 
+/// Exports the database to a separate file with the given passphrase.
+///
+/// Set passphrase to empty string to export the database unencrypted.
 async fn export_backup(context: &Context, dir: &Path, passphrase: String) -> Result<()> {
     // get a fine backup file name (the name includes the date so that multiple backup instances are possible)
     let now = time();
@@ -522,13 +523,6 @@ async fn export_backup(context: &Context, dir: &Path, passphrase: String) -> Res
         .await?;
     sql::housekeeping(context).await.ok_or_log(context);
 
-    context
-        .sql
-        .execute("VACUUM;", paramsv![])
-        .await
-        .map_err(|e| warn!(context, "Vacuum failed, exporting anyway {}", e))
-        .ok();
-
     ensure!(
         context.scheduler.read().await.is_none(),
         "cannot export backup, IO is running"
@@ -541,11 +535,31 @@ async fn export_backup(context: &Context, dir: &Path, passphrase: String) -> Res
         dest_path.display(),
     );
 
+    let path_str = temp_db_path
+        .to_str()
+        .with_context(|| format!("path {temp_db_path:?} is not valid unicode"))?;
+
     context
         .sql
-        .export(&temp_db_path, passphrase)
-        .await
-        .with_context(|| format!("failed to backup plaintext database to {temp_db_path:?}"))?;
+        .call(|conn| {
+            if let Err(err) = conn.execute("VACUUM", params![]) {
+                info!(context, "Vacuum failed, exporting anyway: {:#}.", err);
+            }
+            conn.execute(
+                "ATTACH DATABASE ? AS backup KEY ?",
+                paramsv![path_str, passphrase],
+            )
+            .context("failed to attach backup database")?;
+            let res = conn
+                .query_row("SELECT sqlcipher_export('backup')", [], |_row| Ok(()))
+                .context("failed to export to attached backup database");
+            conn.execute("DETACH DATABASE backup", [])
+                .context("failed to detach backup database")?;
+            res?;
+
+            Ok::<_, Error>(())
+        })
+        .await?;
 
     let res = export_backup_inner(context, &temp_db_path, &temp_path).await;
 
@@ -770,7 +784,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use ::pgp::armor::BlockType;
+    use tokio::task;
 
     use super::*;
     use crate::pgp::{split_armored_data, HEADER_AUTOCRYPT, HEADER_SETUPCODE};
@@ -914,6 +931,46 @@ mod tests {
             context2.get_config(Config::Addr).await?,
             Some("alice@example.org".to_string())
         );
+
+        Ok(())
+    }
+
+    /// This is a regression test for
+    /// https://github.com/deltachat/deltachat-android/issues/2263
+    /// where the config cache wasn't reset properly after a backup.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_import_backup_reset_config_cache() -> Result<()> {
+        let backup_dir = tempfile::tempdir()?;
+        let context1 = TestContext::new_alice().await;
+        let context2 = TestContext::new().await;
+        assert!(!context2.is_configured().await?);
+
+        // export from context1
+        imex(&context1, ImexMode::ExportBackup, backup_dir.path(), None).await?;
+
+        // import to context2
+        let backup = has_backup(&context2, backup_dir.path()).await?;
+        let context2_cloned = context2.clone();
+        let handle = task::spawn(async move {
+            imex(
+                &context2_cloned,
+                ImexMode::ImportBackup,
+                backup.as_ref(),
+                None,
+            )
+            .await
+            .unwrap();
+        });
+
+        while !handle.is_finished() {
+            // The database is still unconfigured;
+            // fill the config cache with the old value.
+            context2.is_configured().await.ok();
+            tokio::time::sleep(Duration::from_micros(1)).await;
+        }
+
+        // Assert that the config cache has the new value now.
+        assert!(context2.is_configured().await?);
 
         Ok(())
     }

@@ -1,15 +1,11 @@
 //! # SQLite wrapper.
 
-#![allow(missing_docs)]
-
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::path::Path;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context as _, Result};
-use rusqlite::{config::DbConfig, Connection, OpenFlags};
+use rusqlite::{self, config::DbConfig, Connection, OpenFlags, TransactionBehavior};
 use tokio::sync::RwLock;
 
 use crate::blob::BlobObject;
@@ -26,6 +22,7 @@ use crate::peerstate::{deduplicate_peerstates, Peerstate};
 use crate::stock_str;
 use crate::tools::{delete_file, time};
 
+#[allow(missing_docs)]
 #[macro_export]
 macro_rules! paramsv {
     () => {
@@ -36,6 +33,7 @@ macro_rules! paramsv {
     };
 }
 
+#[allow(missing_docs)]
 #[macro_export]
 macro_rules! params_iterv {
     ($($param:expr),+ $(,)?) => {
@@ -48,6 +46,9 @@ pub(crate) fn params_iter(iter: &[impl crate::ToSql]) -> impl Iterator<Item = &d
 }
 
 mod migrations;
+mod pool;
+
+use pool::Pool;
 
 /// A wrapper around the underlying Sqlite3 object.
 #[derive(Debug)]
@@ -55,16 +56,19 @@ pub struct Sql {
     /// Database file path
     pub(crate) dbfile: PathBuf,
 
-    pool: RwLock<Option<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>>>,
+    /// SQL connection pool.
+    pool: RwLock<Option<Pool>>,
 
     /// None if the database is not open, true if it is open with passphrase and false if it is
     /// open without a passphrase.
     is_encrypted: RwLock<Option<bool>>,
 
+    /// Cache of `config` table.
     pub(crate) config_cache: RwLock<HashMap<String, Option<String>>>,
 }
 
 impl Sql {
+    /// Creates new SQL database.
     pub fn new(dbfile: PathBuf) -> Sql {
         Self {
             dbfile,
@@ -119,120 +123,66 @@ impl Sql {
         // drop closes the connection
     }
 
-    /// Exports the database to a separate file with the given passphrase.
-    ///
-    /// Set passphrase to empty string to export the database unencrypted.
-    pub(crate) async fn export(&self, path: &Path, passphrase: String) -> Result<()> {
-        let path_str = path
-            .to_str()
-            .with_context(|| format!("path {path:?} is not valid unicode"))?;
-        let conn = self.get_conn().await?;
-        tokio::task::block_in_place(move || {
-            conn.execute(
-                "ATTACH DATABASE ? AS backup KEY ?",
-                paramsv![path_str, passphrase],
-            )
-            .context("failed to attach backup database")?;
-            let res = conn
-                .query_row("SELECT sqlcipher_export('backup')", [], |_row| Ok(()))
-                .context("failed to export to attached backup database");
-            conn.execute("DETACH DATABASE backup", [])
-                .context("failed to detach backup database")?;
-            res?;
-
-            Ok(())
-        })
-    }
-
     /// Imports the database from a separate file with the given passphrase.
     pub(crate) async fn import(&self, path: &Path, passphrase: String) -> Result<()> {
         let path_str = path
             .to_str()
-            .with_context(|| format!("path {path:?} is not valid unicode"))?;
-        let conn = self.get_conn().await?;
+            .with_context(|| format!("path {path:?} is not valid unicode"))?
+            .to_string();
+        let res = self
+            .call(move |conn| {
+                // Check that backup passphrase is correct before resetting our database.
+                conn.execute(
+                    "ATTACH DATABASE ? AS backup KEY ?",
+                    paramsv![path_str, passphrase],
+                )
+                .context("failed to attach backup database")?;
+                if let Err(err) = conn
+                    .query_row("SELECT count(*) FROM sqlite_master", [], |_row| Ok(()))
+                    .context("backup passphrase is not correct")
+                {
+                    conn.execute("DETACH DATABASE backup", [])
+                        .context("failed to detach backup database")?;
+                    return Err(err);
+                }
 
-        tokio::task::block_in_place(move || {
-            // Check that backup passphrase is correct before resetting our database.
-            conn.execute(
-                "ATTACH DATABASE ? AS backup KEY ?",
-                paramsv![path_str, passphrase],
-            )
-            .context("failed to attach backup database")?;
-            if let Err(err) = conn
-                .query_row("SELECT count(*) FROM sqlite_master", [], |_row| Ok(()))
-                .context("backup passphrase is not correct")
-            {
+                // Reset the database without reopening it. We don't want to reopen the database because we
+                // don't have main database passphrase at this point.
+                // See <https://sqlite.org/c3ref/c_dbconfig_enable_fkey.html> for documentation.
+                // Without resetting import may fail due to existing tables.
+                conn.set_db_config(DbConfig::SQLITE_DBCONFIG_RESET_DATABASE, true)
+                    .context("failed to set SQLITE_DBCONFIG_RESET_DATABASE")?;
+                conn.execute("VACUUM", [])
+                    .context("failed to vacuum the database")?;
+                conn.set_db_config(DbConfig::SQLITE_DBCONFIG_RESET_DATABASE, false)
+                    .context("failed to unset SQLITE_DBCONFIG_RESET_DATABASE")?;
+                let res = conn
+                    .query_row("SELECT sqlcipher_export('main', 'backup')", [], |_row| {
+                        Ok(())
+                    })
+                    .context("failed to import from attached backup database");
                 conn.execute("DETACH DATABASE backup", [])
                     .context("failed to detach backup database")?;
-                return Err(err);
-            }
+                res?;
+                Ok(())
+            })
+            .await;
 
-            // Reset the database without reopening it. We don't want to reopen the database because we
-            // don't have main database passphrase at this point.
-            // See <https://sqlite.org/c3ref/c_dbconfig_enable_fkey.html> for documentation.
-            // Without resetting import may fail due to existing tables.
-            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_RESET_DATABASE, true)
-                .context("failed to set SQLITE_DBCONFIG_RESET_DATABASE")?;
-            conn.execute("VACUUM", [])
-                .context("failed to vacuum the database")?;
-            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_RESET_DATABASE, false)
-                .context("failed to unset SQLITE_DBCONFIG_RESET_DATABASE")?;
-            let res = conn
-                .query_row("SELECT sqlcipher_export('main', 'backup')", [], |_row| {
-                    Ok(())
-                })
-                .context("failed to import from attached backup database");
-            conn.execute("DETACH DATABASE backup", [])
-                .context("failed to detach backup database")?;
-            res?;
-            Ok(())
-        })
+        // The config cache is wrong now that we have a different database
+        self.config_cache.write().await.clear();
+
+        res
     }
 
-    fn new_pool(
-        dbfile: &Path,
-        passphrase: String,
-    ) -> Result<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>> {
-        let mut open_flags = OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        open_flags.insert(OpenFlags::SQLITE_OPEN_READ_WRITE);
-        open_flags.insert(OpenFlags::SQLITE_OPEN_CREATE);
+    /// Creates a new connection pool.
+    fn new_pool(dbfile: &Path, passphrase: String) -> Result<Pool> {
+        let mut connections = Vec::new();
+        for _ in 0..3 {
+            let connection = new_connection(dbfile, &passphrase)?;
+            connections.push(connection);
+        }
 
-        // this actually creates min_idle database handles just now.
-        // therefore, with_init() must not try to modify the database as otherwise
-        // we easily get busy-errors (eg. table-creation, journal_mode etc. should be done on only one handle)
-        let mgr = r2d2_sqlite::SqliteConnectionManager::file(dbfile)
-            .with_flags(open_flags)
-            .with_init(move |c| {
-                c.execute_batch(&format!(
-                    "PRAGMA cipher_memory_security = OFF; -- Too slow on Android
-                     PRAGMA secure_delete=on;
-                     PRAGMA busy_timeout = {};
-                     PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
-                     PRAGMA foreign_keys=on;
-                     ",
-                    Duration::from_secs(10).as_millis()
-                ))?;
-                c.pragma_update(None, "key", passphrase.clone())?;
-                // Try to enable auto_vacuum. This will only be
-                // applied if the database is new or after successful
-                // VACUUM, which usually happens before backup export.
-                // When auto_vacuum is INCREMENTAL, it is possible to
-                // use PRAGMA incremental_vacuum to return unused
-                // database pages to the filesystem.
-                c.pragma_update(None, "auto_vacuum", "INCREMENTAL".to_string())?;
-
-                c.pragma_update(None, "journal_mode", "WAL".to_string())?;
-                // Default synchronous=FULL is much slower. NORMAL is sufficient for WAL mode.
-                c.pragma_update(None, "synchronous", "NORMAL".to_string())?;
-                Ok(())
-            });
-
-        let pool = r2d2::Pool::builder()
-            .min_idle(Some(2))
-            .max_size(10)
-            .connection_timeout(Duration::from_secs(60))
-            .build(mgr)
-            .context("Can't build SQL connection pool")?;
+        let pool = Pool::new(connections);
         Ok(pool)
     }
 
@@ -244,6 +194,7 @@ impl Sql {
         Ok(())
     }
 
+    /// Updates SQL schema to the latest version.
     pub async fn run_migrations(&self, context: &Context) -> Result<()> {
         // (1) update low-level database structure.
         // this should be done before updates that use high-level objects that
@@ -348,22 +299,41 @@ impl Sql {
         }
     }
 
+    /// Allocates a connection and calls given function with the connection.
+    ///
+    /// Returns the result of the function.
+    pub async fn call<'a, F, R>(&'a self, function: F) -> Result<R>
+    where
+        F: 'a + FnOnce(&mut Connection) -> Result<R> + Send,
+        R: Send + 'static,
+    {
+        let lock = self.pool.read().await;
+        let pool = lock.as_ref().context("no SQL connection")?;
+        let mut conn = pool.get().await?;
+        let res = tokio::task::block_in_place(move || function(&mut conn))?;
+        Ok(res)
+    }
+
     /// Execute the given query, returning the number of affected rows.
-    pub async fn execute(&self, query: &str, params: impl rusqlite::Params) -> Result<usize> {
-        let conn = self.get_conn().await?;
-        tokio::task::block_in_place(move || {
+    pub async fn execute(
+        &self,
+        query: &str,
+        params: impl rusqlite::Params + Send,
+    ) -> Result<usize> {
+        self.call(move |conn| {
             let res = conn.execute(query, params)?;
             Ok(res)
         })
+        .await
     }
 
     /// Executes the given query, returning the last inserted row ID.
-    pub async fn insert(&self, query: &str, params: impl rusqlite::Params) -> Result<i64> {
-        let conn = self.get_conn().await?;
-        tokio::task::block_in_place(move || {
+    pub async fn insert(&self, query: &str, params: impl rusqlite::Params + Send) -> Result<i64> {
+        self.call(move |conn| {
             conn.execute(query, params)?;
             Ok(conn.last_insert_rowid())
         })
+        .await
     }
 
     /// Prepares and executes the statement and maps a function over the resulting rows.
@@ -372,41 +342,32 @@ impl Sql {
     pub async fn query_map<T, F, G, H>(
         &self,
         sql: &str,
-        params: impl rusqlite::Params,
+        params: impl rusqlite::Params + Send,
         f: F,
         mut g: G,
     ) -> Result<H>
     where
-        F: FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
-        G: FnMut(rusqlite::MappedRows<F>) -> Result<H>,
+        F: Send + FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
+        G: Send + FnMut(rusqlite::MappedRows<F>) -> Result<H>,
+        H: Send + 'static,
     {
-        let conn = self.get_conn().await?;
-        tokio::task::block_in_place(move || {
+        self.call(move |conn| {
             let mut stmt = conn.prepare(sql)?;
             let res = stmt.query_map(params, f)?;
             g(res)
         })
-    }
-
-    pub async fn get_conn(
-        &self,
-    ) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>> {
-        let lock = self.pool.read().await;
-        let pool = lock.as_ref().context("no SQL connection")?;
-        let conn = pool.get()?;
-
-        Ok(conn)
+        .await
     }
 
     /// Used for executing `SELECT COUNT` statements only. Returns the resulting count.
-    pub async fn count(&self, query: &str, params: impl rusqlite::Params) -> Result<usize> {
+    pub async fn count(&self, query: &str, params: impl rusqlite::Params + Send) -> Result<usize> {
         let count: isize = self.query_row(query, params, |row| row.get(0)).await?;
         Ok(usize::try_from(count)?)
     }
 
     /// Used for executing `SELECT COUNT` statements only. Returns `true`, if the count is at least
     /// one, `false` otherwise.
-    pub async fn exists(&self, sql: &str, params: impl rusqlite::Params) -> Result<bool> {
+    pub async fn exists(&self, sql: &str, params: impl rusqlite::Params + Send) -> Result<bool> {
         let count = self.count(sql, params).await?;
         Ok(count > 0)
     }
@@ -415,31 +376,37 @@ impl Sql {
     pub async fn query_row<T, F>(
         &self,
         query: &str,
-        params: impl rusqlite::Params,
+        params: impl rusqlite::Params + Send,
         f: F,
     ) -> Result<T>
     where
-        F: FnOnce(&rusqlite::Row) -> rusqlite::Result<T>,
+        F: FnOnce(&rusqlite::Row) -> rusqlite::Result<T> + Send,
+        T: Send + 'static,
     {
-        let conn = self.get_conn().await?;
-        tokio::task::block_in_place(move || {
+        self.call(move |conn| {
             let res = conn.query_row(query, params, f)?;
             Ok(res)
         })
+        .await
     }
 
     /// Execute the function inside a transaction.
     ///
     /// If the function returns an error, the transaction will be rolled back. If it does not return an
     /// error, the transaction will be committed.
+    ///
+    /// Transactions started use IMMEDIATE behavior
+    /// rather than default DEFERRED behavior
+    /// to avoid "database is busy" errors
+    /// which may happen when DEFERRED transaction
+    /// is attempted to be promoted to a write transaction.
     pub async fn transaction<G, H>(&self, callback: G) -> Result<H>
     where
         H: Send + 'static,
         G: Send + FnOnce(&mut rusqlite::Transaction<'_>) -> Result<H>,
     {
-        let mut conn = self.get_conn().await?;
-        tokio::task::block_in_place(move || {
-            let mut transaction = conn.transaction()?;
+        self.call(move |conn| {
+            let mut transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let ret = callback(&mut transaction);
 
             match ret {
@@ -453,12 +420,12 @@ impl Sql {
                 }
             }
         })
+        .await
     }
 
     /// Query the database if the requested table already exists.
     pub async fn table_exists(&self, name: &str) -> Result<bool> {
-        let conn = self.get_conn().await?;
-        tokio::task::block_in_place(move || {
+        self.call(move |conn| {
             let mut exists = false;
             conn.pragma(None, "table_info", name.to_string(), |_row| {
                 // will only be executed if the info was found
@@ -468,12 +435,12 @@ impl Sql {
 
             Ok(exists)
         })
+        .await
     }
 
     /// Check if a column exists in a given table.
     pub async fn col_exists(&self, table_name: &str, col_name: &str) -> Result<bool> {
-        let conn = self.get_conn().await?;
-        tokio::task::block_in_place(move || {
+        self.call(move |conn| {
             let mut exists = false;
             // `PRAGMA table_info` returns one row per column,
             // each row containing 0=cid, 1=name, 2=type, 3=notnull, 4=dflt_value
@@ -487,29 +454,27 @@ impl Sql {
 
             Ok(exists)
         })
+        .await
     }
 
     /// Execute a query which is expected to return zero or one row.
     pub async fn query_row_optional<T, F>(
         &self,
         sql: &str,
-        params: impl rusqlite::Params,
+        params: impl rusqlite::Params + Send,
         f: F,
     ) -> Result<Option<T>>
     where
-        F: FnOnce(&rusqlite::Row) -> rusqlite::Result<T>,
+        F: Send + FnOnce(&rusqlite::Row) -> rusqlite::Result<T>,
+        T: Send + 'static,
     {
-        let conn = self.get_conn().await?;
-        let res =
-            tokio::task::block_in_place(move || match conn.query_row(sql.as_ref(), params, f) {
-                Ok(res) => Ok(Some(res)),
-                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                Err(rusqlite::Error::InvalidColumnType(_, _, rusqlite::types::Type::Null)) => {
-                    Ok(None)
-                }
-                Err(err) => Err(err),
-            })?;
-        Ok(res)
+        self.call(move |conn| match conn.query_row(sql.as_ref(), params, f) {
+            Ok(res) => Ok(Some(res)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(rusqlite::Error::InvalidColumnType(_, _, rusqlite::types::Type::Null)) => Ok(None),
+            Err(err) => Err(err.into()),
+        })
+        .await
     }
 
     /// Executes a query which is expected to return one row and one
@@ -518,10 +483,10 @@ impl Sql {
     pub async fn query_get_value<T>(
         &self,
         query: &str,
-        params: impl rusqlite::Params,
+        params: impl rusqlite::Params + Send,
     ) -> Result<Option<T>>
     where
-        T: rusqlite::types::FromSql,
+        T: rusqlite::types::FromSql + Send + 'static,
     {
         self.query_row_optional(query, params, |row| row.get::<_, T>(0))
             .await
@@ -585,22 +550,26 @@ impl Sql {
         Ok(value)
     }
 
+    /// Sets configuration for the given key to 32-bit signed integer value.
     pub async fn set_raw_config_int(&self, key: &str, value: i32) -> Result<()> {
         self.set_raw_config(key, Some(&format!("{value}"))).await
     }
 
+    /// Returns 32-bit signed integer configuration value for the given key.
     pub async fn get_raw_config_int(&self, key: &str) -> Result<Option<i32>> {
         self.get_raw_config(key)
             .await
             .map(|s| s.and_then(|s| s.parse().ok()))
     }
 
+    /// Returns 32-bit unsigned integer configuration value for the given key.
     pub async fn get_raw_config_u32(&self, key: &str) -> Result<Option<u32>> {
         self.get_raw_config(key)
             .await
             .map(|s| s.and_then(|s| s.parse().ok()))
     }
 
+    /// Returns boolean configuration value for the given key.
     pub async fn get_raw_config_bool(&self, key: &str) -> Result<bool> {
         // Not the most obvious way to encode bool as string, but it is matter
         // of backward compatibility.
@@ -608,27 +577,68 @@ impl Sql {
         Ok(res.unwrap_or_default() > 0)
     }
 
+    /// Sets configuration for the given key to boolean value.
     pub async fn set_raw_config_bool(&self, key: &str, value: bool) -> Result<()> {
         let value = if value { Some("1") } else { None };
         self.set_raw_config(key, value).await
     }
 
+    /// Sets configuration for the given key to 64-bit signed integer value.
     pub async fn set_raw_config_int64(&self, key: &str, value: i64) -> Result<()> {
         self.set_raw_config(key, Some(&format!("{value}"))).await
     }
 
+    /// Returns 64-bit signed integer configuration value for the given key.
     pub async fn get_raw_config_int64(&self, key: &str) -> Result<Option<i64>> {
         self.get_raw_config(key)
             .await
             .map(|s| s.and_then(|r| r.parse().ok()))
     }
 
+    /// Returns configuration cache.
     #[cfg(feature = "internals")]
     pub fn config_cache(&self) -> &RwLock<HashMap<String, Option<String>>> {
         &self.config_cache
     }
 }
 
+/// Creates a new SQLite connection.
+///
+/// `path` is the database path.
+///
+/// `passphrase` is the SQLCipher database passphrase.
+/// Empty string if database is not encrypted.
+fn new_connection(path: &Path, passphrase: &str) -> Result<Connection> {
+    let mut flags = OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    flags.insert(OpenFlags::SQLITE_OPEN_READ_WRITE);
+    flags.insert(OpenFlags::SQLITE_OPEN_CREATE);
+
+    let conn = Connection::open_with_flags(path, flags)?;
+    conn.execute_batch(
+        "PRAGMA cipher_memory_security = OFF; -- Too slow on Android
+         PRAGMA secure_delete=on;
+         PRAGMA busy_timeout = 60000; -- 60 seconds
+         PRAGMA temp_store=memory; -- Avoid SQLITE_IOERR_GETTEMPPATH errors on Android
+         PRAGMA foreign_keys=on;
+         ",
+    )?;
+    conn.pragma_update(None, "key", passphrase)?;
+    // Try to enable auto_vacuum. This will only be
+    // applied if the database is new or after successful
+    // VACUUM, which usually happens before backup export.
+    // When auto_vacuum is INCREMENTAL, it is possible to
+    // use PRAGMA incremental_vacuum to return unused
+    // database pages to the filesystem.
+    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL".to_string())?;
+
+    conn.pragma_update(None, "journal_mode", "WAL".to_string())?;
+    // Default synchronous=FULL is much slower. NORMAL is sufficient for WAL mode.
+    conn.pragma_update(None, "synchronous", "NORMAL".to_string())?;
+
+    Ok(conn)
+}
+
+/// Cleanup the account to restore some storage and optimize the database.
 pub async fn housekeeping(context: &Context) -> Result<()> {
     if let Err(err) = remove_unused_files(context).await {
         warn!(
@@ -687,6 +697,7 @@ pub async fn housekeeping(context: &Context) -> Result<()> {
     Ok(())
 }
 
+/// Enumerates used files in the blobdir and removes unused ones.
 pub async fn remove_unused_files(context: &Context) -> Result<()> {
     let mut files_in_use = HashSet::new();
     let mut unreferenced_count = 0;
@@ -938,11 +949,16 @@ mod tests {
     async fn test_auto_vacuum() -> Result<()> {
         let t = TestContext::new().await;
 
-        let conn = t.sql.get_conn().await?;
-        let auto_vacuum = conn.pragma_query_value(None, "auto_vacuum", |row| {
-            let auto_vacuum: i32 = row.get(0)?;
-            Ok(auto_vacuum)
-        })?;
+        let auto_vacuum = t
+            .sql
+            .call(|conn| {
+                let auto_vacuum = conn.pragma_query_value(None, "auto_vacuum", |row| {
+                    let auto_vacuum: i32 = row.get(0)?;
+                    Ok(auto_vacuum)
+                })?;
+                Ok(auto_vacuum)
+            })
+            .await?;
 
         // auto_vacuum=2 is the same as auto_vacuum=INCREMENTAL
         assert_eq!(auto_vacuum, 2);

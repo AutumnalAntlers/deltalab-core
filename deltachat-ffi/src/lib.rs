@@ -1,4 +1,4 @@
-#![warn(unused, clippy::all)]
+#![warn(unused, clippy::all, clippy::missing_docs_in_private_items)]
 #![allow(
     non_camel_case_types,
     non_snake_case,
@@ -2003,12 +2003,10 @@ pub unsafe extern "C" fn dc_create_contact(
     let ctx = &*context;
     let name = to_string_lossy(name);
 
-    block_on(async move {
-        Contact::create(ctx, &name, &to_string_lossy(addr))
-            .await
-            .map(|id| id.to_u32())
-            .unwrap_or(0)
-    })
+    block_on(Contact::create(ctx, &name, &to_string_lossy(addr)))
+        .log_err(ctx, "Cannot create contact")
+        .map(|id| id.to_u32())
+        .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -3596,6 +3594,16 @@ pub unsafe extern "C" fn dc_msg_set_html(msg: *mut dc_msg_t, html: *const libc::
     }
     let ffi_msg = &mut *msg;
     ffi_msg.message.set_html(to_opt_string_lossy(html))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_msg_set_subject(msg: *mut dc_msg_t, subject: *const libc::c_char) {
+    if msg.is_null() {
+        eprintln!("ignoring careless call to dc_msg_get_subject()");
+        return;
+    }
+    let ffi_msg = &mut *msg;
+    ffi_msg.message.set_subject(to_string_lossy(subject));
 }
 
 #[no_mangle]
