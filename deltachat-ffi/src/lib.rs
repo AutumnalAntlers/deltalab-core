@@ -1,4 +1,4 @@
-#![warn(unused, clippy::all, clippy::missing_docs_in_private_items)]
+#![warn(unused, clippy::all)]
 #![allow(
     non_camel_case_types,
     non_snake_case,
@@ -2661,7 +2661,7 @@ pub unsafe fn dc_array_is_independent(
 ///
 /// This is the structure behind [dc_chatlist_t] which is the opaque
 /// structure representing a chatlist in the FFI API.  It exists
-/// because the FFI API has a refernce from the message to the
+/// because the FFI API has a reference from the message to the
 /// context, but the Rust API does not, so the FFI layer needs to glue
 /// these together.
 pub struct ChatlistWrapper {
@@ -2805,7 +2805,7 @@ pub unsafe extern "C" fn dc_chatlist_get_context(
 ///
 /// This is the structure behind [dc_chat_t] which is the opaque
 /// structure representing a chat in the FFI API.  It exists
-/// because the FFI API has a refernce from the message to the
+/// because the FFI API has a reference from the message to the
 /// context, but the Rust API does not, so the FFI layer needs to glue
 /// these together.
 pub struct ChatWrapper {
@@ -3061,7 +3061,7 @@ pub unsafe extern "C" fn dc_chat_get_info_json(
 ///
 /// This is the structure behind [dc_msg_t] which is the opaque
 /// structure representing a message in the FFI API.  It exists
-/// because the FFI API has a refernce from the message to the
+/// because the FFI API has a reference from the message to the
 /// context, but the Rust API does not, so the FFI layer needs to glue
 /// these together.
 pub struct MessageWrapper {
@@ -3814,7 +3814,7 @@ pub unsafe extern "C" fn dc_msg_force_plaintext(msg: *mut dc_msg_t) {
 ///
 /// This is the structure behind [dc_contact_t] which is the opaque
 /// structure representing a contact in the FFI API.  It exists
-/// because the FFI API has a refernce from the message to the
+/// because the FFI API has a reference from the message to the
 /// context, but the Rust API does not, so the FFI layer needs to glue
 /// these together.
 pub struct ContactWrapper {
@@ -4607,33 +4607,22 @@ mod jsonrpc {
             return ptr::null_mut();
         }
 
-        let cmd_api =
-            deltachat_jsonrpc::api::CommandApi::from_arc((*account_manager).inner.clone());
+        let account_manager = &*account_manager;
+        let events = block_on(account_manager.read()).get_event_emitter();
+        let cmd_api = deltachat_jsonrpc::api::CommandApi::from_arc(account_manager.inner.clone());
 
         let (request_handle, receiver) = RpcClient::new();
-        let request_handle2 = request_handle.clone();
-        let handle = RpcSession::new(request_handle, cmd_api);
+        let handle = RpcSession::new(request_handle.clone(), cmd_api);
 
-        let events = block_on({
-            async {
-                let am = (*account_manager).inner.clone();
-                let ev = am.read().await.get_event_emitter();
-                drop(am);
-                ev
+        let event_thread = spawn(async move {
+            while let Some(event) = events.recv().await {
+                let event = event_to_json_rpc_notification(event);
+                request_handle
+                    .send_notification("event", Some(event))
+                    .await?;
             }
-        });
-
-        let event_thread = spawn({
-            async move {
-                while let Some(event) = events.recv().await {
-                    let event = event_to_json_rpc_notification(event);
-                    request_handle2
-                        .send_notification("event", Some(event))
-                        .await?;
-                }
-                let res: Result<(), anyhow::Error> = Ok(());
-                res
-            }
+            let res: Result<(), anyhow::Error> = Ok(());
+            res
         });
 
         let instance = dc_jsonrpc_instance_t {

@@ -17,13 +17,13 @@ opt-level = 0
 # This does not apply to crates in the workspace.
 # <https://doc.rust-lang.org/cargo/reference/profiles.html#overrides>
 [profile.dev.package."*"]
-opt-level = 3
+opt-level = "z"
 
 [profile.release]
 strip = true
 lto = true
 panic = 'abort'
-codegen-units = 1
+opt-level = "z"
 
 [dependencies]
 deltachat_derive = { path = "./deltachat_derive" }
@@ -33,7 +33,7 @@ ratelimit = { path = "./deltachat-ratelimit" }
 anyhow = "1"
 async-channel = "1.8.0"
 async-imap = { git = "https://github.com/async-email/async-imap", branch = "master", default-features = false, features = ["runtime-tokio"] }
-async-native-tls = { version = "0.4", default-features = false, features = ["runtime-tokio"] }
+async-native-tls = { version = "0.5", default-features = false, features = ["runtime-tokio"] }
 async-smtp = { version = "0.8", default-features = false, features = ["runtime-tokio"] }
 async_zip = { version = "0.0.9", default-features = false, features = ["deflate"] }
 backtrace = "0.3"

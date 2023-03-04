@@ -431,6 +431,7 @@ impl Context {
     async fn pop_smtp_status_update(
         &self,
     ) -> Result<Option<(MsgId, StatusUpdateSerial, StatusUpdateSerial, String)>> {
+        let _lock = self.sql.write_lock().await;
         let res = self
             .sql
             .query_row_optional(
@@ -657,7 +658,7 @@ async fn get_blob(archive: &mut async_zip::read::fs::ZipFileReader, name: &str) 
 
 impl Message {
     /// Get handle to a webxdc ZIP-archive.
-    /// To check for file existance use archive.by_name(), to read a file, use get_blob(archive).
+    /// To check for file existence use archive.by_name(), to read a file, use get_blob(archive).
     async fn get_webxdc_archive(
         &self,
         context: &Context,
@@ -670,8 +671,10 @@ impl Message {
         Ok(archive)
     }
 
-    /// Return file form inside an archive.
+    /// Return file from inside an archive.
     /// Currently, this works only if the message is an webxdc instance.
+    ///
+    /// `name` is the filename within the archive, e.g. `index.html`.
     pub async fn get_webxdc_blob(&self, context: &Context, name: &str) -> Result<Vec<u8>> {
         ensure!(self.viewtype == Viewtype::Webxdc, "No webxdc instance.");
 
