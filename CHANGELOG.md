@@ -1,12 +1,18 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
 
 ### Changes
-- Drop unused SQL columns #4141
 - "full message view" not needed because of footers that go to contact status #4151
 - Pick up system's light/dark mode in generated message HTML #4150
 - Support non-persistent configuration with DELTACHAT_* env
+- Print deltachat-repl errors with causes. #4166
+- Increase MSRV to 1.64. #4167
+- Core takes care of stopping and re-starting IO itself where needed,
+  e.g. during backup creation.  It is no longer needed to call
+  dc_stop_io().  dc_start_io() can now be called at any time without
+  harm. #4138
+- More accurate maybe_add_bcc_self device message text #4175
 
 ### Fixes
 - Fix segmentation fault if `dc_context_unref()` is called during
@@ -14,9 +20,11 @@
   or `dc_jsonrpc_instance_t` is unreferenced
   during handling the JSON-RPC request. #4153
 - Delete expired messages using multiple SQL requests. #4158
+- Do not emit "Failed to run incremental vacuum" warnings on success. #4160
+- Ability to send backup over network and QR code to setup second device #4007
+- Disable buffering during STARTTLS setup. #4190
 
-
-## 1.111.0
+## [1.111.0] - 2023-03-05
 
 ### Changes
 - Make smeared timestamp generation non-async. #4075
@@ -2305,3 +2313,6 @@
 For a full list of changes, please see our closed Pull Requests: 
 
 https://github.com/deltachat/deltachat-core-rust/pulls?q=is%3Apr+is%3Aclosed
+
+[unreleased]: https://github.com/deltachat/deltachat-core-rust/compare/v1.111.0...HEAD
+[1.111.0]: https://github.com/deltachat/deltachat-core-rust/compare/v1.110.0...v1.111.0

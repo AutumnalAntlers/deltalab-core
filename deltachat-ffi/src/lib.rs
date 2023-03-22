@@ -28,9 +28,10 @@ use deltachat::constants::DC_MSG_ID_LAST_SPECIAL;
 use deltachat::contact::{Contact, ContactId, Origin};
 use deltachat::context::Context;
 use deltachat::ephemeral::Timer as EphemeralTimer;
+use deltachat::imex::BackupProvider;
 use deltachat::key::DcKey;
 use deltachat::message::MsgId;
-use deltachat::qr_code_generator::get_securejoin_qr_svg;
+use deltachat::qr_code_generator::{generate_backup_qr, get_securejoin_qr_svg};
 use deltachat::reaction::{get_msg_reactions, send_reaction, Reactions};
 use deltachat::stock_str::StockMessage;
 use deltachat::stock_str::StockStrings;
@@ -4142,6 +4143,116 @@ pub unsafe extern "C" fn dc_str_unref(s: *mut libc::c_char) {
     libc::free(s as *mut _)
 }
 
+pub struct BackupProviderWrapper {
+    context: *const dc_context_t,
+    provider: BackupProvider,
+}
+
+pub type dc_backup_provider_t = BackupProviderWrapper;
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_backup_provider_new(
+    context: *mut dc_context_t,
+) -> *mut dc_backup_provider_t {
+    if context.is_null() {
+        eprintln!("ignoring careless call to dc_backup_provider_new()");
+        return ptr::null_mut();
+    }
+    let ctx = &*context;
+    block_on(BackupProvider::prepare(ctx))
+        .map(|provider| BackupProviderWrapper {
+            context: ctx,
+            provider,
+        })
+        .map(|ffi_provider| Box::into_raw(Box::new(ffi_provider)))
+        .log_err(ctx, "BackupProvider failed")
+        .context("BackupProvider failed")
+        .set_last_error(ctx)
+        .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_backup_provider_get_qr(
+    provider: *const dc_backup_provider_t,
+) -> *mut libc::c_char {
+    if provider.is_null() {
+        eprintln!("ignoring careless call to dc_backup_provider_qr");
+        return "".strdup();
+    }
+    let ffi_provider = &*provider;
+    let ctx = &*ffi_provider.context;
+    deltachat::qr::format_backup(&ffi_provider.provider.qr())
+        .log_err(ctx, "BackupProvider get_qr failed")
+        .context("BackupProvider get_qr failed")
+        .set_last_error(ctx)
+        .unwrap_or_default()
+        .strdup()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_backup_provider_get_qr_svg(
+    provider: *const dc_backup_provider_t,
+) -> *mut libc::c_char {
+    if provider.is_null() {
+        eprintln!("ignoring careless call to dc_backup_provider_qr_svg()");
+        return "".strdup();
+    }
+    let ffi_provider = &*provider;
+    let ctx = &*ffi_provider.context;
+    let provider = &ffi_provider.provider;
+    block_on(generate_backup_qr(ctx, &provider.qr()))
+        .log_err(ctx, "BackupProvider get_qr_svg failed")
+        .context("BackupProvider get_qr_svg failed")
+        .set_last_error(ctx)
+        .unwrap_or_default()
+        .strdup()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_backup_provider_wait(provider: *mut dc_backup_provider_t) {
+    if provider.is_null() {
+        eprintln!("ignoring careless call to dc_backup_provider_wait()");
+        return;
+    }
+    let ffi_provider = &mut *provider;
+    let ctx = &*ffi_provider.context;
+    let provider = &mut ffi_provider.provider;
+    block_on(provider)
+        .log_err(ctx, "Failed to await BackupProvider")
+        .context("Failed to await BackupProvider")
+        .set_last_error(ctx)
+        .ok();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_backup_provider_unref(provider: *mut dc_backup_provider_t) {
+    drop(Box::from_raw(provider));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_receive_backup(
+    context: *mut dc_context_t,
+    qr: *const libc::c_char,
+) -> libc::c_int {
+    if context.is_null() {
+        eprintln!("ignoring careless call to dc_receive_backup()");
+        return 0;
+    }
+    let ctx = &*context;
+    let qr_text = to_string_lossy(qr);
+    let qr = match block_on(qr::check_qr(ctx, &qr_text)).log_err(ctx, "Invalid QR code") {
+        Ok(qr) => qr,
+        Err(_) => return 0,
+    };
+    spawn(async move {
+        imex::get_backup(ctx, qr)
+            .await
+            .log_err(ctx, "Get backup failed")
+            .ok();
+    });
+    1
+}
+
 trait ResultExt<T, E> {
     /// Like `log_err()`, but:
     /// - returns the default value instead of an Err value.
@@ -4159,6 +4270,56 @@ impl<T: Default, E: std::fmt::Display> ResultExt<T, E> for Result<T, E> {
                 Default::default()
             }
         }
+    }
+}
+
+trait ResultLastError<T, E>
+where
+    E: std::fmt::Display,
+{
+    /// Sets this `Err` value using [`Context::set_last_error`].
+    ///
+    /// Normally each FFI-API *should* call this if it handles an error from the Rust API:
+    /// errors which need to be reported to users in response to an API call need to be
+    /// propagated up the Rust API and at the FFI boundary need to be stored into the "last
+    /// error" so the FFI users can retrieve an appropriate error message on failure.  Often
+    /// you will want to combine this with a call to [`LogExt::log_err`].
+    ///
+    /// Since historically calls to the `deltachat::log::error!()` macro were (and sometimes
+    /// still are) shown as error toasts to the user, this macro also calls
+    /// [`Context::set_last_error`].  It is preferable however to rely on normal error
+    /// propagation in Rust code however and only use this `ResultExt::set_last_error` call
+    /// in the FFI layer.
+    ///
+    /// # Example
+    ///
+    /// Fully handling an error in the FFI code looks like this currently:
+    ///
+    /// ```no_compile
+    /// some_dc_rust_api_call_returning_result()
+    ///     .log_err(&context, "My API call failed")
+    ///     .context("My API call failed")
+    ///     .set_last_error(&context)
+    ///     .unwrap_or_default()
+    /// ```
+    ///
+    /// As shows it is a shame the `.log_err()` call currently needs a message instead of
+    /// relying on an implicit call to the [`anyhow::Context`] call if needed.  This stems
+    /// from a time before we fully embraced anyhow.  Some day we'll also fix that.
+    ///
+    /// [`Context::set_last_error`]: context::Context::set_last_error
+    fn set_last_error(self, context: &context::Context) -> Result<T, E>;
+}
+
+impl<T, E> ResultLastError<T, E> for Result<T, E>
+where
+    E: std::fmt::Display,
+{
+    fn set_last_error(self, context: &context::Context) -> Result<T, E> {
+        if let Err(ref err) = self {
+            context.set_last_error(&format!("{err:#}"));
+        }
+        self
     }
 }
 

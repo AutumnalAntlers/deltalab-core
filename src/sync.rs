@@ -109,8 +109,8 @@ impl Context {
         Ok(())
     }
 
-    // Add deleted qr-code token to the list of items to be synced
-    // so that the token also gets deleted on the other devices.
+    /// Adds deleted qr-code token to the list of items to be synced
+    /// so that the token also gets deleted on the other devices.
     pub(crate) async fn sync_qr_code_token_deletion(
         &self,
         invitenumber: String,
@@ -155,7 +155,7 @@ impl Context {
             .sql
             .query_map(
                 "SELECT id, item FROM multi_device_sync ORDER BY id;",
-                paramsv![],
+                (),
                 |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?)),
                 |rows| {
                     let mut ids = vec![];
@@ -201,7 +201,7 @@ impl Context {
         self.sql
             .execute(
                 &format!("DELETE FROM multi_device_sync WHERE id IN ({ids});"),
-                paramsv![],
+                (),
             )
             .await?;
         Ok(())

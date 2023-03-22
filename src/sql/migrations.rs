@@ -391,7 +391,7 @@ UPDATE chats SET protected=1, type=120 WHERE type=130;"#,
         sql.execute(
             r#"
 CREATE TABLE imap_sync (folder TEXT PRIMARY KEY, uidvalidity INTEGER DEFAULT 0, uid_next INTEGER DEFAULT 0);"#,
-paramsv![]
+()
         )
             .await?;
         for c in &[
@@ -691,15 +691,18 @@ CREATE INDEX smtp_messageid ON imap(rfc724_mid);
         sql.set_db_version(98).await?;
     }
     if dbversion < 99 {
-        sql.execute_migration(
-            "ALTER TABLE msgs DROP COLUMN server_folder;
-             ALTER TABLE msgs DROP COLUMN server_uid;
-             ALTER TABLE msgs DROP COLUMN move_state;
-             ALTER TABLE chats DROP COLUMN draft_timestamp;
-             ALTER TABLE chats DROP COLUMN draft_txt",
-            99,
-        )
-        .await?;
+        // sql.execute_migration(
+        //     "ALTER TABLE msgs DROP COLUMN server_folder;
+        //      ALTER TABLE msgs DROP COLUMN server_uid;
+        //      ALTER TABLE msgs DROP COLUMN move_state;
+        //      ALTER TABLE chats DROP COLUMN draft_timestamp;
+        //      ALTER TABLE chats DROP COLUMN draft_txt",
+        //     99,
+        // )
+        // .await?;
+
+        // Reverted above, as it requires to load the whole DB in memory.
+        sql.set_db_version(99).await?;
     }
 
     let new_version = sql

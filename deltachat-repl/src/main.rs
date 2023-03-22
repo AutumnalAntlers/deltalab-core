@@ -152,13 +152,15 @@ impl Completer for DcHelper {
     }
 }
 
-const IMEX_COMMANDS: [&str; 12] = [
+const IMEX_COMMANDS: [&str; 14] = [
     "initiate-key-transfer",
     "get-setupcodebegin",
     "continue-key-transfer",
     "has-backup",
     "export-backup",
     "import-backup",
+    "send-backup",
+    "receive-backup",
     "export-keys",
     "import-keys",
     "export-setup",
@@ -359,7 +361,7 @@ async fn start(args: Vec<String>) -> Result<(), Error> {
                                 false
                             }
                             Err(err) => {
-                                println!("Error: {err}");
+                                println!("Error: {err:#}");
                                 true
                             }
                         }
@@ -374,7 +376,7 @@ async fn start(args: Vec<String>) -> Result<(), Error> {
                     break;
                 }
                 Err(err) => {
-                    println!("Error: {err}");
+                    println!("Error: {err:#}");
                     break;
                 }
             }

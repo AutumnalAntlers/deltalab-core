@@ -659,7 +659,10 @@ impl ChatId {
         context.emit_msgs_changed_without_ids();
 
         context.set_config(Config::LastHousekeeping, None).await?;
-        context.interrupt_inbox(InterruptInfo::new(false)).await;
+        context
+            .scheduler
+            .interrupt_inbox(InterruptInfo::new(false))
+            .await;
 
         if chat.is_self_talk() {
             let mut msg = Message::new(Viewtype::Text);
@@ -873,7 +876,7 @@ impl ChatId {
                     AND c.blocked=0
                     AND c.archived=1
                     ",
-                    paramsv![],
+                    (),
                 )
                 .await?
         } else {
@@ -1687,7 +1690,7 @@ impl Chat {
 
             maybe_set_logging_xdc(context, msg, self.id).await?;
         }
-        context.interrupt_ephemeral_task().await;
+        context.scheduler.interrupt_ephemeral_task().await;
         Ok(msg.id)
     }
 }
@@ -2221,7 +2224,10 @@ async fn send_msg_inner(context: &Context, chat_id: ChatId, msg: &mut Message) -
             context.emit_event(EventType::LocationChanged(Some(ContactId::SELF)));
         }
 
-        context.interrupt_smtp(InterruptInfo::new(false)).await;
+        context
+            .scheduler
+            .interrupt_smtp(InterruptInfo::new(false))
+            .await;
     }
 
     Ok(msg.id)
@@ -2598,7 +2604,7 @@ pub async fn marknoticed_chat(context: &Context, chat_id: ChatId) -> Result<()> 
                 "SELECT DISTINCT(m.chat_id) FROM msgs m
                     LEFT JOIN chats c ON m.chat_id=c.id
                     WHERE m.state=10 AND m.hidden=0 AND m.chat_id>9 AND c.blocked=0 AND c.archived=1",
-                paramsv![],
+                    (),
                 |row| row.get::<_, ChatId>(0),
                 |ids| ids.collect::<Result<Vec<_>, _>>().map_err(Into::into)
             )
@@ -3485,7 +3491,10 @@ pub async fn forward_msgs(context: &Context, msg_ids: &[MsgId], chat_id: ChatId)
                     .await?;
                 curr_timestamp += 1;
                 if create_send_msg_job(context, new_msg_id).await?.is_some() {
-                    context.interrupt_smtp(InterruptInfo::new(false)).await;
+                    context
+                        .scheduler
+                        .interrupt_smtp(InterruptInfo::new(false))
+                        .await;
                 }
             }
             created_chats.push(chat_id);
@@ -3540,7 +3549,10 @@ pub async fn resend_msgs(context: &Context, msg_ids: &[MsgId]) -> Result<()> {
                 msg_id: msg.id,
             });
             if create_send_msg_job(context, msg.id).await?.is_some() {
-                context.interrupt_smtp(InterruptInfo::new(false)).await;
+                context
+                    .scheduler
+                    .interrupt_smtp(InterruptInfo::new(false))
+                    .await;
             }
         }
     }
@@ -3552,10 +3564,7 @@ pub(crate) async fn get_chat_cnt(context: &Context) -> Result<usize> {
         // no database, no chats - this is no error (needed eg. for information)
         let count = context
             .sql
-            .count(
-                "SELECT COUNT(*) FROM chats WHERE id>9 AND blocked=0;",
-                paramsv![],
-            )
+            .count("SELECT COUNT(*) FROM chats WHERE id>9 AND blocked=0;", ())
             .await?;
         Ok(count)
     } else {
@@ -3728,17 +3737,14 @@ pub(crate) async fn delete_and_reset_all_device_msgs(context: &Context) -> Resul
             paramsv![ContactId::DEVICE],
         )
         .await?;
-    context
-        .sql
-        .execute("DELETE FROM devmsglabels;", paramsv![])
-        .await?;
+    context.sql.execute("DELETE FROM devmsglabels;", ()).await?;
 
     // Insert labels for welcome messages to avoid them being readded on reconfiguration.
     context
         .sql
         .execute(
             r#"INSERT INTO devmsglabels (label) VALUES ("core-welcome-image"), ("core-welcome")"#,
-            paramsv![],
+            (),
         )
         .await?;
     context.set_config(Config::QuotaExceeding, None).await?;

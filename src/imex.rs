@@ -5,18 +5,19 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use ::pgp::types::KeyTrait;
-use anyhow::{bail, ensure, format_err, Context as _, Error, Result};
+use anyhow::{bail, ensure, format_err, Context as _, Result};
 use futures::StreamExt;
 use futures_lite::FutureExt;
 use rand::{thread_rng, Rng};
 use tokio::fs::{self, File};
 use tokio_tar::Archive;
 
-use crate::blob::BlobObject;
+use crate::blob::{BlobDirContents, BlobObject};
 use crate::chat::{self, delete_and_reset_all_device_msgs, ChatId};
 use crate::config::Config;
 use crate::contact::ContactId;
 use crate::context::Context;
+use crate::e2ee;
 use crate::events::EventType;
 use crate::key::{self, DcKey, DcSecretKey, SignedPublicKey, SignedSecretKey};
 use crate::log::LogExt;
@@ -30,7 +31,10 @@ use crate::tools::{
     create_folder, delete_file, get_filesuffix_lc, open_file_std, read_file, time, write_file,
     EmailAddress,
 };
-use crate::{e2ee, tools};
+
+mod transfer;
+
+pub use transfer::{get_backup, BackupProvider};
 
 // Name of the database file in the backup.
 const DBFILE_BACKUP_NAME: &str = "dc_database_backup.sqlite";
@@ -86,13 +90,17 @@ pub async fn imex(
 ) -> Result<()> {
     let cancel = context.alloc_ongoing().await?;
 
-    let res = imex_inner(context, what, path, passphrase)
-        .race(async {
-            cancel.recv().await.ok();
-            Err(format_err!("canceled"))
-        })
-        .await;
-
+    let res = {
+        let mut guard = context.scheduler.pause(context.clone()).await;
+        let res = imex_inner(context, what, path, passphrase)
+            .race(async {
+                cancel.recv().await.ok();
+                Err(format_err!("canceled"))
+            })
+            .await;
+        guard.resume().await;
+        res
+    };
     context.free_ongoing().await;
 
     if let Err(err) = res.as_ref() {
@@ -250,7 +258,7 @@ async fn maybe_add_bcc_self_device_msg(context: &Context) -> Result<()> {
         msg.text = Some(
             "It seems you are using multiple devices with Delta Chat. Great!\n\n\
              If you also want to synchronize outgoing messages across all devices, \
-             go to the settings and enable \"Send copy to self\"."
+             go to \"Settings → Advanced\" and enable \"Send Copy to Self\"."
                 .to_string(),
         );
         chat::add_device_msg(context, Some("bcc-self-hint"), Some(&mut msg)).await?;
@@ -413,7 +421,7 @@ async fn import_backup(
         "Cannot import backups to accounts in use."
     );
     ensure!(
-        context.scheduler.read().await.is_none(),
+        !context.scheduler.is_running().await,
         "cannot import backup, IO is running"
     );
 
@@ -517,16 +525,9 @@ async fn export_backup(context: &Context, dir: &Path, passphrase: String) -> Res
     let _d1 = DeleteOnDrop(temp_db_path.clone());
     let _d2 = DeleteOnDrop(temp_path.clone());
 
-    context
-        .sql
-        .set_raw_config_int("backup_time", now as i32)
-        .await?;
-    sql::housekeeping(context).await.ok_or_log(context);
-
-    ensure!(
-        context.scheduler.read().await.is_none(),
-        "cannot export backup, IO is running"
-    );
+    export_database(context, &temp_db_path, passphrase)
+        .await
+        .context("could not export database")?;
 
     info!(
         context,
@@ -534,32 +535,6 @@ async fn export_backup(context: &Context, dir: &Path, passphrase: String) -> Res
         context.get_dbfile().display(),
         dest_path.display(),
     );
-
-    let path_str = temp_db_path
-        .to_str()
-        .with_context(|| format!("path {temp_db_path:?} is not valid unicode"))?;
-
-    context
-        .sql
-        .call_write(|conn| {
-            if let Err(err) = conn.execute("VACUUM", params![]) {
-                info!(context, "Vacuum failed, exporting anyway: {:#}.", err);
-            }
-            conn.execute(
-                "ATTACH DATABASE ? AS backup KEY ?",
-                paramsv![path_str, passphrase],
-            )
-            .context("failed to attach backup database")?;
-            let res = conn
-                .query_row("SELECT sqlcipher_export('backup')", [], |_row| Ok(()))
-                .context("failed to export to attached backup database");
-            conn.execute("DETACH DATABASE backup", [])
-                .context("failed to detach backup database")?;
-            res?;
-
-            Ok::<_, Error>(())
-        })
-        .await?;
 
     let res = export_backup_inner(context, &temp_db_path, &temp_path).await;
 
@@ -598,29 +573,15 @@ async fn export_backup_inner(
         .append_path_with_name(temp_db_path, DBFILE_BACKUP_NAME)
         .await?;
 
-    let read_dir = tools::read_dir(context.get_blobdir()).await?;
-    let count = read_dir.len();
-    let mut written_files = 0;
-
+    let blobdir = BlobDirContents::new(context).await?;
     let mut last_progress = 0;
-    for entry in read_dir {
-        let name = entry.file_name();
-        if !entry.file_type().await?.is_file() {
-            warn!(
-                context,
-                "Export: Found dir entry {} that is not a file, ignoring",
-                name.to_string_lossy()
-            );
-            continue;
-        }
-        let mut file = File::open(entry.path()).await?;
-        let path_in_archive = PathBuf::from(BLOBS_BACKUP_NAME).join(name);
-        builder.append_file(path_in_archive, &mut file).await?;
 
-        written_files += 1;
-        let progress = 1000 * written_files / count;
+    for (i, blob) in blobdir.iter().enumerate() {
+        let mut file = File::open(blob.to_abs_path()).await?;
+        let path_in_archive = PathBuf::from(BLOBS_BACKUP_NAME).join(blob.as_name());
+        builder.append_file(path_in_archive, &mut file).await?;
+        let progress = 1000 * i / blobdir.len();
         if progress != last_progress && progress > 10 && progress < 1000 {
-            // We already emitted ImexProgress(10) above
             context.emit_event(EventType::ImexProgress(progress));
             last_progress = progress;
         }
@@ -698,7 +659,7 @@ async fn export_self_keys(context: &Context, dir: &Path) -> Result<()> {
         .sql
         .query_map(
             "SELECT id, public_key, private_key, is_default FROM keypairs;",
-            paramsv![],
+            (),
             |row| {
                 let id = row.get(0)?;
                 let public_key_blob: Vec<u8> = row.get(1)?;
@@ -780,6 +741,48 @@ where
         .with_context(|| format!("cannot write key to {}", file_name.display()))?;
     context.emit_event(EventType::ImexFileWritten(file_name));
     Ok(())
+}
+
+/// Exports the database to *dest*, encrypted using *passphrase*.
+///
+/// The directory of *dest* must already exist, if *dest* itself exists it will be
+/// overwritten.
+///
+/// This also verifies that IO is not running during the export.
+async fn export_database(context: &Context, dest: &Path, passphrase: String) -> Result<()> {
+    ensure!(
+        !context.scheduler.is_running().await,
+        "cannot export backup, IO is running"
+    );
+    let now = time().try_into().context("32-bit UNIX time overflow")?;
+
+    // TODO: Maybe introduce camino crate for UTF-8 paths where we need them.
+    let dest = dest
+        .to_str()
+        .with_context(|| format!("path {} is not valid unicode", dest.display()))?;
+
+    context.sql.set_raw_config_int("backup_time", now).await?;
+    sql::housekeeping(context).await.ok_or_log(context);
+    context
+        .sql
+        .call_write(|conn| {
+            conn.execute("VACUUM;", params![])
+                .map_err(|err| warn!(context, "Vacuum failed, exporting anyway {err}"))
+                .ok();
+            conn.execute(
+                "ATTACH DATABASE ? AS backup KEY ?",
+                paramsv![dest, passphrase],
+            )
+            .context("failed to attach backup database")?;
+            let res = conn
+                .query_row("SELECT sqlcipher_export('backup')", [], |_row| Ok(()))
+                .context("failed to export to attached backup database");
+            conn.execute("DETACH DATABASE backup", [])
+                .context("failed to detach backup database")?;
+            res?;
+            Ok(())
+        })
+        .await
 }
 
 #[cfg(test)]

@@ -421,7 +421,9 @@ impl Context {
                  DO UPDATE SET last_serial=excluded.last_serial, descr=excluded.descr",
                 paramsv![instance.id, status_update_serial, status_update_serial, descr],
             ).await?;
-            self.interrupt_smtp(InterruptInfo::new(false)).await;
+            self.scheduler
+                .interrupt_smtp(InterruptInfo::new(false))
+                .await;
         }
         Ok(())
     }
@@ -438,7 +440,7 @@ impl Context {
                 "DELETE FROM smtp_status_updates
                      WHERE msg_id IN (SELECT msg_id FROM smtp_status_updates LIMIT 1)
                      RETURNING msg_id, first_serial, last_serial, descr",
-                paramsv![],
+                (),
                 |row| {
                     let instance_id: MsgId = row.get(0)?;
                     let first_serial: StatusUpdateSerial = row.get(1)?;
@@ -1195,7 +1197,7 @@ mod tests {
         );
         assert_eq!(
             t.sql
-                .count("SELECT COUNT(*) FROM msgs_status_updates;", paramsv![],)
+                .count("SELECT COUNT(*) FROM msgs_status_updates;", ())
                 .await?,
             0
         );
@@ -1543,14 +1545,14 @@ mod tests {
 
         assert_eq!(
             t.sql
-                .count("SELECT COUNT(*) FROM smtp_status_updates", paramsv![],)
+                .count("SELECT COUNT(*) FROM smtp_status_updates", ())
                 .await?,
             1
         );
         t.flush_status_updates().await?;
         assert_eq!(
             t.sql
-                .count("SELECT COUNT(*) FROM smtp_status_updates", paramsv![],)
+                .count("SELECT COUNT(*) FROM smtp_status_updates", ())
                 .await?,
             0
         );
@@ -1580,7 +1582,7 @@ mod tests {
             .await?;
         assert_eq!(
             t.sql
-                .count("SELECT COUNT(*) FROM smtp_status_updates", paramsv![],)
+                .count("SELECT COUNT(*) FROM smtp_status_updates", ())
                 .await?,
             3
         );
@@ -1606,7 +1608,7 @@ mod tests {
             }
             assert_eq!(
                 t.sql
-                    .count("SELECT COUNT(*) FROM smtp_status_updates", paramsv![],)
+                    .count("SELECT COUNT(*) FROM smtp_status_updates", ())
                     .await?,
                 2 - i
             );
@@ -1648,7 +1650,7 @@ mod tests {
         assert_eq!(
             alice
                 .sql
-                .count("SELECT COUNT(*) FROM smtp_status_updates", paramsv![],)
+                .count("SELECT COUNT(*) FROM smtp_status_updates", ())
                 .await?,
             0
         );
@@ -2438,7 +2440,7 @@ sth_for_the = "future""#
         assert_eq!(
             alice
                 .sql
-                .count("SELECT COUNT(*) FROM msgs_status_updates;", paramsv![],)
+                .count("SELECT COUNT(*) FROM msgs_status_updates;", ())
                 .await?,
             0
         );
@@ -2461,7 +2463,7 @@ sth_for_the = "future""#
         assert!(
             alice
                 .sql
-                .count("SELECT COUNT(*) FROM msgs_status_updates;", paramsv![],)
+                .count("SELECT COUNT(*) FROM msgs_status_updates;", ())
                 .await?
                 > 0
         );

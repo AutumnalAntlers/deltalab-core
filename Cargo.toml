@@ -3,7 +3,7 @@ name = "deltachat"
 version = "1.111.0"
 edition = "2021"
 license = "MPL-2.0"
-rust-version = "1.63"
+rust-version = "1.64"
 
 [profile.dev]
 debug = 0
@@ -25,6 +25,11 @@ lto = true
 panic = 'abort'
 opt-level = "z"
 
+[patch.crates-io]
+default-net = { git = "https://github.com/dignifiedquire/default-net.git", branch="feat-android" }
+quinn-udp = { git = "https://github.com/quinn-rs/quinn", branch="main" }
+quinn-proto = { git = "https://github.com/quinn-rs/quinn", branch="main" }
+
 [dependencies]
 deltachat_derive = { path = "./deltachat_derive" }
 format-flowed = { path = "./format-flowed" }
@@ -34,7 +39,7 @@ anyhow = "1"
 async-channel = "1.8.0"
 async-imap = { git = "https://github.com/async-email/async-imap", branch = "master", default-features = false, features = ["runtime-tokio"] }
 async-native-tls = { version = "0.5", default-features = false, features = ["runtime-tokio"] }
-async-smtp = { version = "0.8", default-features = false, features = ["runtime-tokio"] }
+async-smtp = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
 async_zip = { version = "0.0.9", default-features = false, features = ["deflate"] }
 backtrace = "0.3"
 base64 = "0.21"
@@ -49,6 +54,8 @@ futures-lite = "1.12.0"
 hex = "0.4.0"
 humansize = "2"
 image = { version = "0.24.5", default-features=false, features = ["gif", "jpeg", "ico", "png", "pnm", "webp", "bmp"] }
+# iroh = { version = "0.3.0", default-features = false }
+iroh = { git = 'https://github.com/n0-computer/iroh', branch = "flub/ticket-multiple-addrs" }
 kamadak-exif = "0.5"
 lettre_email = { git = "https://github.com/deltachat/lettre", branch = "master" }
 libc = "0.2"
@@ -96,6 +103,7 @@ log = "0.4"
 pretty_env_logger = "0.4"
 proptest = { version = "1", default-features = false, features = ["std"] }
 tempfile = "3"
+testdir = "0.7.2"
 tokio = { version = "1", features = ["parking_lot", "rt-multi-thread", "macros"] }
 
 [workspace]

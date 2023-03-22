@@ -23,8 +23,9 @@ use crate::events::{Event, EventEmitter, EventType, Events};
 use crate::key::{DcKey, SignedPublicKey};
 use crate::login_param::LoginParam;
 use crate::message::{self, MessageState, MsgId};
+use crate::qr::Qr;
 use crate::quota::QuotaInfo;
-use crate::scheduler::Scheduler;
+use crate::scheduler::SchedulerState;
 use crate::sql::Sql;
 use crate::stock_str::StockStrings;
 use crate::timesmearing::SmearedTimestamp;
@@ -191,6 +192,10 @@ pub struct InnerContext {
     pub(crate) blobdir: PathBuf,
     pub(crate) sql: Sql,
     pub(crate) smeared_timestamp: SmearedTimestamp,
+    /// The global "ongoing" process state.
+    ///
+    /// This is a global mutex-like state for operations which should be modal in the
+    /// clients.
     running_state: RwLock<RunningState>,
     /// Mutex to avoid generating the key for the user more than once.
     pub(crate) generating_key_mutex: Mutex<()>,
@@ -201,7 +206,7 @@ pub struct InnerContext {
     pub(crate) translated_stockstrings: StockStrings,
     pub(crate) events: Events,
 
-    pub(crate) scheduler: RwLock<Option<Scheduler>>,
+    pub(crate) scheduler: SchedulerState,
     pub(crate) ratelimit: RwLock<Ratelimit>,
 
     /// Recently loaded quota information, if any.
@@ -236,6 +241,14 @@ pub struct InnerContext {
 
     /// If debug logging is enabled, this contains all necessary information
     pub(crate) debug_logging: RwLock<Option<DebugLogging>>,
+
+    /// QR code for currently running [`BackupProvider`].
+    ///
+    /// This is only available if a backup export is currently running, it will also be
+    /// holding the ongoing process while running.
+    ///
+    /// [`BackupProvider`]: crate::imex::BackupProvider
+    pub(crate) export_provider: std::sync::Mutex<Option<Qr>>,
 }
 
 #[derive(Debug)]
@@ -370,7 +383,7 @@ impl Context {
             wrong_pw_warning_mutex: Mutex::new(()),
             translated_stockstrings: stockstrings,
             events,
-            scheduler: RwLock::new(None),
+            scheduler: SchedulerState::new(),
             ratelimit: RwLock::new(Ratelimit::new(Duration::new(60, 0), 6.0)), // Allow to send 6 messages immediately, no more than once every 10 seconds.
             quota: RwLock::new(None),
             quota_update_request: AtomicBool::new(false),
@@ -380,6 +393,7 @@ impl Context {
             last_full_folder_scan: Mutex::new(None),
             last_error: std::sync::RwLock::new("".to_string()),
             debug_logging: RwLock::new(None),
+            export_provider: std::sync::Mutex::new(None),
         };
 
         let ctx = Context {
@@ -395,42 +409,23 @@ impl Context {
             warn!(self, "can not start io on a context that is not configured");
             return;
         }
-
-        info!(self, "starting IO");
-        let mut lock = self.inner.scheduler.write().await;
-        if lock.is_none() {
-            match Scheduler::start(self.clone()).await {
-                Err(err) => error!(self, "Failed to start IO: {:#}", err),
-                Ok(scheduler) => *lock = Some(scheduler),
-            }
-        }
+        self.scheduler.start(self.clone()).await;
     }
 
     /// Stops the IO scheduler.
     pub async fn stop_io(&self) {
-        // Sending an event wakes up event pollers (get_next_event)
-        // so the caller of stop_io() can arrange for proper termination.
-        // For this, the caller needs to instruct the event poller
-        // to terminate on receiving the next event and then call stop_io()
-        // which will emit the below event(s)
-        info!(self, "stopping IO");
-        if let Some(debug_logging) = self.debug_logging.read().await.as_ref() {
-            debug_logging.loop_handle.abort();
-        }
-        if let Some(scheduler) = self.inner.scheduler.write().await.take() {
-            scheduler.stop(self).await;
-        }
+        self.scheduler.stop(self).await;
     }
 
     /// Restarts the IO scheduler if it was running before
     /// when it is not running this is an no-op
     pub async fn restart_io_if_running(&self) {
-        info!(self, "restarting IO");
-        let is_running = { self.inner.scheduler.read().await.is_some() };
-        if is_running {
-            self.stop_io().await;
-            self.start_io().await;
-        }
+        self.scheduler.restart(self).await;
+    }
+
+    /// Indicate that the network likely has come back.
+    pub async fn maybe_network(&self) {
+        self.scheduler.maybe_network().await;
     }
 
     /// Returns a reference to the underlying SQL instance.
@@ -521,6 +516,13 @@ impl Context {
 
     // Ongoing process allocation/free/check
 
+    /// Tries to acquire the global UI "ongoing" mutex.
+    ///
+    /// This is for modal operations during which no other user actions are allowed.  Only
+    /// one such operation is allowed at any given time.
+    ///
+    /// The return value is a cancel token, which will release the ongoing mutex when
+    /// dropped.
     pub(crate) async fn alloc_ongoing(&self) -> Result<Receiver<()>> {
         let mut s = self.running_state.write().await;
         ensure!(
@@ -566,6 +568,17 @@ impl Context {
         }
     }
 
+    /// Returns the QR-code of the currently running [`BackupProvider`].
+    ///
+    /// [`BackupProvider`]: crate::imex::BackupProvider
+    pub fn backup_export_qr(&self) -> Option<Qr> {
+        self.export_provider
+            .lock()
+            .expect("poisoned lock")
+            .as_ref()
+            .cloned()
+    }
+
     /*******************************************************************************
      * UI chat/message related API
      ******************************************************************************/
@@ -590,7 +603,7 @@ impl Context {
             .unwrap_or_default();
         let journal_mode = self
             .sql
-            .query_get_value("PRAGMA journal_mode;", paramsv![])
+            .query_get_value("PRAGMA journal_mode;", ())
             .await?
             .unwrap_or_else(|| "unknown".to_string());
         let e2ee_enabled = self.get_config_int(Config::E2eeEnabled).await?;
@@ -599,14 +612,11 @@ impl Context {
         let bcc_self = self.get_config_int(Config::BccSelf).await?;
         let send_sync_msgs = self.get_config_int(Config::SendSyncMsgs).await?;
 
-        let prv_key_cnt = self
-            .sql
-            .count("SELECT COUNT(*) FROM keypairs;", paramsv![])
-            .await?;
+        let prv_key_cnt = self.sql.count("SELECT COUNT(*) FROM keypairs;", ()).await?;
 
         let pub_key_cnt = self
             .sql
-            .count("SELECT COUNT(*) FROM acpeerstates;", paramsv![])
+            .count("SELECT COUNT(*) FROM acpeerstates;", ())
             .await?;
         let fingerprint_str = match SignedPublicKey::load_self(self).await {
             Ok(key) => key.fingerprint().hex(),
