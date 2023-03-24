@@ -500,6 +500,7 @@ pub unsafe extern "C" fn dc_event_get_id(event: *mut dc_event_t) -> libc::c_int 
         EventType::SmtpMessageSent(_) => 103,
         EventType::ImapMessageDeleted(_) => 104,
         EventType::ImapMessageMoved(_) => 105,
+        EventType::ImapInboxIdle => 106,
         EventType::NewBlobFile(_) => 150,
         EventType::DeletedBlobFile(_) => 151,
         EventType::Warning(_) => 300,
@@ -544,6 +545,7 @@ pub unsafe extern "C" fn dc_event_get_data1_int(event: *mut dc_event_t) -> libc:
         | EventType::SmtpMessageSent(_)
         | EventType::ImapMessageDeleted(_)
         | EventType::ImapMessageMoved(_)
+        | EventType::ImapInboxIdle
         | EventType::NewBlobFile(_)
         | EventType::DeletedBlobFile(_)
         | EventType::Warning(_)
@@ -594,6 +596,7 @@ pub unsafe extern "C" fn dc_event_get_data2_int(event: *mut dc_event_t) -> libc:
         | EventType::SmtpMessageSent(_)
         | EventType::ImapMessageDeleted(_)
         | EventType::ImapMessageMoved(_)
+        | EventType::ImapInboxIdle
         | EventType::NewBlobFile(_)
         | EventType::DeletedBlobFile(_)
         | EventType::Warning(_)
@@ -653,6 +656,7 @@ pub unsafe extern "C" fn dc_event_get_data2_str(event: *mut dc_event_t) -> *mut 
         EventType::MsgsChanged { .. }
         | EventType::ReactionsChanged { .. }
         | EventType::IncomingMsg { .. }
+        | EventType::ImapInboxIdle
         | EventType::MsgsNoticed(_)
         | EventType::MsgDelivered { .. }
         | EventType::MsgFailed { .. }
@@ -4240,17 +4244,28 @@ pub unsafe extern "C" fn dc_receive_backup(
     }
     let ctx = &*context;
     let qr_text = to_string_lossy(qr);
-    let qr = match block_on(qr::check_qr(ctx, &qr_text)).log_err(ctx, "Invalid QR code") {
+    receive_backup(ctx.clone(), qr_text)
+}
+
+// Because this is a long-running operation make sure we own the Context.  This stops a FFI
+// user from deallocating it by calling unref on the object while we are using it.
+fn receive_backup(ctx: Context, qr_text: String) -> libc::c_int {
+    let qr = match block_on(qr::check_qr(&ctx, &qr_text))
+        .log_err(&ctx, "Invalid QR code")
+        .context("Invalid QR code")
+        .set_last_error(&ctx)
+    {
         Ok(qr) => qr,
         Err(_) => return 0,
     };
-    spawn(async move {
-        imex::get_backup(ctx, qr)
-            .await
-            .log_err(ctx, "Get backup failed")
-            .ok();
-    });
-    1
+    match block_on(imex::get_backup(&ctx, qr))
+        .log_err(&ctx, "Get backup failed")
+        .context("Get backup failed")
+        .set_last_error(&ctx)
+    {
+        Ok(_) => 1,
+        Err(_) => 0,
+    }
 }
 
 trait ResultExt<T, E> {

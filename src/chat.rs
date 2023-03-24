@@ -247,7 +247,7 @@ impl ChatId {
                 } else {
                     warn!(
                         context,
-                        "Cannot create chat, contact {} does not exist.", contact_id,
+                        "Cannot create chat, contact {contact_id} does not exist."
                     );
                     bail!("Can not create chat for non-existing contact");
                 }
@@ -285,7 +285,7 @@ impl ChatId {
         let chat_id = ChatId::new(u32::try_from(row_id)?);
         info!(
             context,
-            "Created group/mailinglist '{}' grpid={} as {}, blocked={}",
+            "Created group/mailinglist '{}' grpid={} as {}, blocked={}.",
             grpname,
             grpid,
             chat_id,
@@ -358,14 +358,14 @@ impl ChatId {
                     if contact_id != ContactId::SELF {
                         info!(
                             context,
-                            "Blocking the contact {} to block 1:1 chat", contact_id
+                            "Blocking the contact {contact_id} to block 1:1 chat."
                         );
                         Contact::block(context, contact_id).await?;
                     }
                 }
             }
             Chattype::Group => {
-                info!(context, "Can't block groups yet, deleting the chat");
+                info!(context, "Can't block groups yet, deleting the chat.");
                 self.delete(context).await?;
             }
             Chattype::Mailinglist => {
@@ -520,7 +520,7 @@ impl ChatId {
         let chat = Chat::load_from_db(context, self).await?;
 
         if let Err(e) = self.inner_set_protection(context, protect).await {
-            error!(context, "Cannot set protection: {}", e); // make error user-visible
+            error!(context, "Cannot set protection: {e:#}."); // make error user-visible
             return Err(e);
         }
 
@@ -1090,7 +1090,7 @@ impl ChatId {
         );
         info!(
             context,
-            "set gossiped_timestamp for chat {} to {}.", self, timestamp,
+            "Set gossiped_timestamp for chat {} to {}.", self, timestamp,
         );
 
         context
@@ -1231,7 +1231,7 @@ impl Chat {
                     Err(err) => {
                         error!(
                             context,
-                            "failed to load contacts for {}: {:#}", chat.id, err
+                            "Failed to load contacts for {}: {:#}.", chat.id, err
                         );
                     }
                 }
@@ -2052,8 +2052,11 @@ async fn prepare_msg_blob(context: &Context, msg: &mut Message) -> Result<()> {
             .with_context(|| format!("attachment missing for message of type #{}", msg.viewtype))?;
 
         if msg.viewtype == Viewtype::Image {
-            if let Err(e) = blob.recode_to_image_size(context).await {
-                warn!(context, "Cannot recode image, using original data: {:?}", e);
+            if let Err(err) = blob.recode_to_image_size(context).await {
+                warn!(
+                    context,
+                    "Cannot recode image, using original data: {err:#}."
+                );
             }
         }
         msg.param.set(Param::File, blob.as_name());
@@ -2276,7 +2279,7 @@ async fn create_send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<
     let attach_selfavatar = match shall_attach_selfavatar(context, msg.chat_id).await {
         Ok(attach_selfavatar) => attach_selfavatar,
         Err(err) => {
-            warn!(context, "job: cannot get selfavatar-state: {:#}", err);
+            warn!(context, "SMTP job cannot get selfavatar-state: {err:#}.");
             false
         }
     };
@@ -2303,7 +2306,7 @@ async fn create_send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<
         // may happen eg. for groups with only SELF and bcc_self disabled
         info!(
             context,
-            "message {} has no recipient, skipping smtp-send", msg_id
+            "Message {msg_id} has no recipient, skipping smtp-send."
         );
         msg_id.set_delivered(context).await?;
         return Ok(None);
@@ -2338,27 +2341,27 @@ async fn create_send_msg_job(context: &Context, msg_id: MsgId) -> Result<Option<
 
     if 0 != rendered_msg.last_added_location_id {
         if let Err(err) = location::set_kml_sent_timestamp(context, msg.chat_id, time()).await {
-            error!(context, "Failed to set kml sent_timestamp: {:#}", err);
+            error!(context, "Failed to set kml sent_timestamp: {err:#}.");
         }
         if !msg.hidden {
             if let Err(err) =
                 location::set_msg_location_id(context, msg.id, rendered_msg.last_added_location_id)
                     .await
             {
-                error!(context, "Failed to set msg_location_id: {:#}", err);
+                error!(context, "Failed to set msg_location_id: {err:#}.");
             }
         }
     }
 
     if let Some(sync_ids) = rendered_msg.sync_ids_to_delete {
         if let Err(err) = context.delete_sync_ids(sync_ids).await {
-            error!(context, "Failed to delete sync ids: {:#}", err);
+            error!(context, "Failed to delete sync ids: {err:#}.");
         }
     }
 
     if attach_selfavatar {
         if let Err(err) = msg.chat_id.set_selfavatar_timestamp(context, time()).await {
-            error!(context, "Failed to set selfavatar timestamp: {:#}", err);
+            error!(context, "Failed to set selfavatar timestamp: {err:#}.");
         }
     }
 
@@ -2713,8 +2716,7 @@ pub(crate) async fn mark_old_messages_as_noticed(
     if !changed_chats.is_empty() {
         info!(
             context,
-            "Marking chats as noticed because there are newer outgoing messages: {:?}",
-            changed_chats
+            "Marking chats as noticed because there are newer outgoing messages: {changed_chats:?}."
         );
     }
 
@@ -3035,7 +3037,7 @@ pub(crate) async fn add_contact_to_chat_ex(
         // if SELF is not in the group, members cannot be added at all.
         warn!(
             context,
-            "invalid attempt to add self e-mail address to group"
+            "Invalid attempt to add self e-mail address to group."
         );
         return Ok(false);
     }
@@ -3614,7 +3616,7 @@ pub async fn add_device_msg_with_importance(
 
     if let Some(label) = label {
         if was_device_msg_ever_added(context, label).await? {
-            info!(context, "device-message {} already added", label);
+            info!(context, "Device-message {label} already added.");
             return Ok(msg_id);
         }
     }

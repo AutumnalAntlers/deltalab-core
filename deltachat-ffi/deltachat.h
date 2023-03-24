@@ -5706,6 +5706,14 @@ void dc_event_unref(dc_event_t* event);
 #define DC_EVENT_IMAP_MESSAGE_MOVED   105
 
 /**
+ * Emitted before going into IDLE on the Inbox folder.
+ *
+ * @param data1 0
+ * @param data2 0
+ */
+#define DC_EVENT_IMAP_INBOX_IDLE 106
+
+/**
  * Emitted when a new blob file was successfully written
  *
  * @param data1 0
@@ -6989,6 +6997,11 @@ void dc_event_unref(dc_event_t* event);
 ///
 /// `%1$s` will be replaced by name and address of the contact.
 #define DC_STR_PROTECTION_DISABLED_BY_OTHER 161
+
+/// "Scan to set up second device for %1$s"
+///
+/// `%1$s` will be replaced by name and address of the account.
+#define DC_STR_BACKUP_TRANSFER_QR 162
 
 /**
  * @}

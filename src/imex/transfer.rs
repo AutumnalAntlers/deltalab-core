@@ -91,7 +91,7 @@ impl BackupProvider {
 
         // Acquire global "ongoing" mutex.
         let cancel_token = context.alloc_ongoing().await?;
-        let mut paused_guard = context.scheduler.pause(context.clone()).await;
+        let paused_guard = context.scheduler.pause(context.clone()).await;
         let context_dir = context
             .get_blobdir()
             .parent()
@@ -119,23 +119,22 @@ impl BackupProvider {
             Ok((provider, ticket)) => (provider, ticket),
             Err(err) => {
                 context.free_ongoing().await;
-                paused_guard.resume().await;
                 return Err(err);
             }
         };
         let handle = {
             let context = context.clone();
             tokio::spawn(async move {
-                let res = Self::watch_provider(&context, provider, cancel_token, dbfile).await;
+                let res = Self::watch_provider(&context, provider, cancel_token).await;
                 context.free_ongoing().await;
-                paused_guard.resume().await;
+
+                // Explicit drop to move the guards into this future
+                drop(paused_guard);
+                drop(dbfile);
                 res
             })
         };
-        let slf = Self { handle, ticket };
-        let qr = slf.qr();
-        *context.export_provider.lock().expect("poisoned lock") = Some(qr);
-        Ok(slf)
+        Ok(Self { handle, ticket })
     }
 
     /// Creates the provider task.
@@ -189,7 +188,6 @@ impl BackupProvider {
         context: &Context,
         mut provider: Provider,
         cancel_token: Receiver<()>,
-        _dbfile: TempPathGuard,
     ) -> Result<()> {
         // _dbfile exists so we can clean up the file once it is no longer needed
         let mut events = provider.subscribe();
@@ -255,11 +253,6 @@ impl BackupProvider {
                 },
             }
         };
-        context
-            .export_provider
-            .lock()
-            .expect("poisoned lock")
-            .take();
         match &res {
             Ok(_) => context.emit_event(SendProgress::Completed.into()),
             Err(err) => {
@@ -377,7 +370,7 @@ pub async fn get_backup(context: &Context, qr: Qr) -> Result<()> {
         !context.is_configured().await?,
         "Cannot import backups to accounts in use."
     );
-    let mut guard = context.scheduler.pause(context.clone()).await;
+    let _guard = context.scheduler.pause(context.clone()).await;
 
     // Acquire global "ongoing" mutex.
     let cancel_token = context.alloc_ongoing().await?;
@@ -389,7 +382,6 @@ pub async fn get_backup(context: &Context, qr: Qr) -> Result<()> {
         }
         _ = cancel_token.recv() => Err(format_err!("cancelled")),
     };
-    guard.resume().await;
     res
 }
 

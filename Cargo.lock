@@ -271,24 +271,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "async_io_utilities"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b20cffc5590f4bf33f05f97a3ea587feba9c50d20325b401daa096b92ff7da0"
-dependencies = [
- "tokio",
-]
-
-[[package]]
 name = "async_zip"
-version = "0.0.9"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a36d43bdefc7215b2b3a97edd03b1553b7969ad76551025eedd3b913c645f6e"
+checksum = "c50d29ab7e2f9e808cca1a69ea56a36f4ff216f54a41a23aae1fd4afc05cc020"
 dependencies = [
  "async-compression",
- "async_io_utilities",
- "chrono",
  "crc32fast",
+ "log",
+ "pin-project",
  "thiserror",
  "tokio",
 ]
@@ -1145,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat"
-version = "1.111.0"
+version = "1.112.0"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1218,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat-jsonrpc"
-version = "1.111.0"
+version = "1.112.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1241,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat-repl"
-version = "1.111.0"
+version = "1.112.0"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1256,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat-rpc-server"
-version = "1.111.0"
+version = "1.112.0"
 dependencies = [
  "anyhow",
  "deltachat-jsonrpc",
@@ -1279,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat_ffi"
-version = "1.111.0"
+version = "1.112.0"
 dependencies = [
  "anyhow",
  "deltachat",
@@ -1288,7 +1279,7 @@ dependencies = [
  "libc",
  "num-traits",
  "once_cell",
- "rand 0.7.3",
+ "rand 0.8.5",
  "serde_json",
  "thiserror",
  "tokio",
@@ -2427,7 +2418,7 @@ checksum = "30e22bd8629359895450b59ea7a776c850561b96a3b1d31321c1949d9e6c9146"
 [[package]]
 name = "iroh"
 version = "0.3.0"
-source = "git+https://github.com/n0-computer/iroh?branch=flub/ticket-multiple-addrs#aacd1d84e11b218e55e9622c4500973224904fe9"
+source = "git+https://github.com/n0-computer/iroh?branch=main#9ac4cf6e770879c8b2ec0dc6666fe531469e68e3"
 dependencies = [
  "abao",
  "anyhow",
@@ -2465,6 +2456,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-subscriber",
+ "walkdir",
  "webpki",
  "x509-parser",
  "zeroize",
@@ -3026,9 +3018,9 @@ checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "openssl"
-version = "0.10.45"
+version = "0.10.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b102428fd03bc5edf97f62620f7298614c45cedf287c271e7ed450bbaf83f2e1"
+checksum = "518915b97df115dd36109bfa429a48b8f737bd05508cf9588977b599648926d2"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -3067,9 +3059,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.80"
+version = "0.9.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23bbbf7854cd45b83958ebe919f0e8e516793727652e27fda10a8384cfc790b7"
+checksum = "666416d899cf077260dac8698d60a60b435a46d57e82acb1be3d0dad87284e5b"
 dependencies = [
  "autocfg",
  "cc",

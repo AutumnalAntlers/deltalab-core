@@ -1,6 +1,6 @@
 [package]
 name = "deltachat-rpc-server"
-version = "1.111.0"
+version = "1.112.0"
 description = "DeltaChat JSON-RPC server"
 edition = "2021"
 readme = "README.md"
@@ -8,9 +8,6 @@ license = "MPL-2.0"
 
 keywords = ["deltachat", "chat", "openpgp", "email", "encryption"]
 categories = ["cryptography", "std", "email"]
-
-[[bin]]
-name = "deltachat-rpc-server"
 
 [dependencies]
 deltachat-jsonrpc = { path = "../deltachat-jsonrpc", default-features = false }
