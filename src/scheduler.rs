@@ -50,7 +50,7 @@ impl SchedulerState {
     pub(crate) async fn start(&self, context: Context) {
         let mut inner = self.inner.write().await;
         inner.started = true;
-        if inner.scheduler.is_none() && !inner.paused {
+        if inner.scheduler.is_none() && inner.paused == 0 {
             Self::do_start(inner, context).await;
         }
     }
@@ -99,15 +99,15 @@ impl SchedulerState {
     pub(crate) async fn pause<'a>(&'_ self, context: Context) -> IoPausedGuard {
         {
             let mut inner = self.inner.write().await;
-            inner.paused = true;
+            inner.paused += 1;
             Self::do_stop(inner, &context).await;
         }
         let (tx, rx) = oneshot::channel();
         tokio::spawn(async move {
             rx.await.ok();
             let mut inner = context.scheduler.inner.write().await;
-            inner.paused = false;
-            if inner.started && inner.scheduler.is_none() {
+            inner.paused -= 1;
+            if inner.paused == 0 && inner.started && inner.scheduler.is_none() {
                 SchedulerState::do_start(inner, context.clone()).await;
             }
         });
@@ -199,8 +199,10 @@ impl SchedulerState {
 #[derive(Debug, Default)]
 struct InnerSchedulerState {
     scheduler: Option<Scheduler>,
+    /// Whether IO should be started if there is no [`IoPausedGuard`] active.
     started: bool,
-    paused: bool,
+    /// The number of [`IoPausedGuard`]s that are outstanding.
+    paused: u32,
 }
 
 /// Guard to make sure the IO Scheduler is resumed.
@@ -301,7 +303,7 @@ async fn inbox_loop(ctx: Context, started: Sender<()>, inbox_handlers: ImapConne
                             let next_housekeeping_time =
                                 last_housekeeping_time.saturating_add(60 * 60 * 24);
                             if next_housekeeping_time <= time() {
-                                sql::housekeeping(&ctx).await.ok_or_log(&ctx);
+                                sql::housekeeping(&ctx).await.log_err(&ctx).ok();
                             }
                         }
                         Err(err) => {
@@ -410,7 +412,8 @@ async fn fetch_idle(
                 .store_seen_flags_on_imap(ctx)
                 .await
                 .context("store_seen_flags_on_imap")
-                .ok_or_log(ctx);
+                .log_err(ctx)
+                .ok();
         } else {
             warn!(ctx, "No session even though we just prepared it");
         }
@@ -434,7 +437,8 @@ async fn fetch_idle(
     delete_expired_imap_messages(ctx)
         .await
         .context("delete_expired_imap_messages")
-        .ok_or_log(ctx);
+        .log_err(ctx)
+        .ok();
 
     // Scan additional folders only after finishing fetching the watched folder.
     //
@@ -474,7 +478,8 @@ async fn fetch_idle(
         .sync_seen_flags(ctx, &watch_folder)
         .await
         .context("sync_seen_flags")
-        .ok_or_log(ctx);
+        .log_err(ctx)
+        .ok();
 
     connection.connectivity.set_connected(ctx).await;
 
@@ -770,20 +775,22 @@ impl Scheduler {
     pub(crate) async fn stop(self, context: &Context) {
         // Send stop signals to tasks so they can shutdown cleanly.
         for b in self.boxes() {
-            b.conn_state.stop().await.ok_or_log(context);
+            b.conn_state.stop().await.log_err(context).ok();
         }
-        self.smtp.stop().await.ok_or_log(context);
+        self.smtp.stop().await.log_err(context).ok();
 
         // Actually shutdown tasks.
         let timeout_duration = std::time::Duration::from_secs(30);
         for b in once(self.inbox).chain(self.oboxes.into_iter()) {
             tokio::time::timeout(timeout_duration, b.handle)
                 .await
-                .ok_or_log(context);
+                .log_err(context)
+                .ok();
         }
         tokio::time::timeout(timeout_duration, self.smtp_handle)
             .await
-            .ok_or_log(context);
+            .log_err(context)
+            .ok();
         self.ephemeral_handle.abort();
         self.location_handle.abort();
         self.recently_seen_loop.abort();
