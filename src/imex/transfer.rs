@@ -47,9 +47,11 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::blob::BlobDirContents;
-use crate::chat::delete_and_reset_all_device_msgs;
+use crate::chat::{add_device_msg, delete_and_reset_all_device_msgs};
 use crate::context::Context;
+use crate::message::{Message, Viewtype};
 use crate::qr::Qr;
+use crate::stock_str::backup_transfer_msg_body;
 use crate::{e2ee, EventType};
 
 use super::{export_database, DBFILE_BACKUP_NAME};
@@ -97,7 +99,7 @@ impl BackupProvider {
 
         // Acquire global "ongoing" mutex.
         let cancel_token = context.alloc_ongoing().await?;
-        let paused_guard = context.scheduler.pause(context.clone()).await;
+        let paused_guard = context.scheduler.pause(context.clone()).await?;
         let context_dir = context
             .get_blobdir()
             .parent()
@@ -270,7 +272,12 @@ impl BackupProvider {
             }
         };
         match &res {
-            Ok(_) => context.emit_event(SendProgress::Completed.into()),
+            Ok(_) => {
+                context.emit_event(SendProgress::Completed.into());
+                let mut msg = Message::new(Viewtype::Text);
+                msg.text = Some(backup_transfer_msg_body(context).await);
+                add_device_msg(context, None, Some(&mut msg)).await?;
+            }
             Err(err) => {
                 error!(context, "Backup transfer failure: {err:#}");
                 context.emit_event(SendProgress::Failed.into())
@@ -386,7 +393,7 @@ pub async fn get_backup(context: &Context, qr: Qr) -> Result<()> {
         !context.is_configured().await?,
         "Cannot import backups to accounts in use."
     );
-    let _guard = context.scheduler.pause(context.clone()).await;
+    let _guard = context.scheduler.pause(context.clone()).await?;
 
     // Acquire global "ongoing" mutex.
     let cancel_token = context.alloc_ongoing().await?;
@@ -407,6 +414,7 @@ async fn get_backup_inner(context: &Context, qr: Qr) -> Result<()> {
 
     match transfer_from_provider(context, &ticket).await {
         Ok(()) => {
+            context.sql.run_migrations(context).await?;
             delete_and_reset_all_device_msgs(context).await?;
             context.emit_event(ReceiveProgress::Completed.into());
             Ok(())

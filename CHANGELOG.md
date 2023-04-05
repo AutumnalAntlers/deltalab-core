@@ -6,9 +6,27 @@
 - Increase MSRV to 1.65.0. #4236
 - Remove upper limit on the attachment size. #4253
 - Update rPGP to 0.10.1. #4236
+- Compress `mime_headers` column with HTML emails stored in database
 
 ### Fixes
 - Fix python bindings README documentation on installing the bindings from source.
+- Show a warning if quota list is empty #4261
+
+## [1.112.6] - 2023-04-04
+
+### Changes
+
+- Add a device message after backup transfer #4301
+
+### Fixed
+
+- Updated `iroh` from 0.4.0 to 0.4.1 to fix transfer of large accounts with many blob files.
+
+## [1.112.5] - 2023-04-02
+
+### Fixes
+
+- Run SQL database migrations after receiving a backup from the network. #4287
 
 ## [1.112.4] - 2023-03-31
 
@@ -24,8 +42,8 @@
 
 ### Changes
 - Update iroh, remove `default-net` from `[patch.crates-io]` section.
-- transfer backup: Connect to mutliple provider addresses concurrently.  This should speed up connection time significantly on the getter side.  #4240
-- Make sure BackupProvider is cancelled on drop (or dc_backup_provider_unref).  The BackupProvider will now alaway finish with an IMEX event of 1000 or 0, previoulsy it would sometimes finishe with 1000 (success) when it really was 0 (failure). #4242
+- transfer backup: Connect to multiple provider addresses concurrently.  This should speed up connection time significantly on the getter side.  #4240
+- Make sure BackupProvider is cancelled on drop (or `dc_backup_provider_unref`).  The BackupProvider will now always finish with an IMEX event of 1000 or 0, previously it would sometimes finished with 1000 (success) when it really was 0 (failure). #4242
 
 ### Fixes
 - Do not return media from trashed messages in the "All media" view. #4247
@@ -35,7 +53,6 @@
 ### Changes
 - Add support for `--version` argument to `deltachat-rpc-server`. #4224
   It can be used to check the installed version without starting the server.
-- Compress `mime_headers` column with HTML emails stored in database
 
 ### Fixes
 - deltachat-rpc-client: fix bug in `Chat.send_message()`: invalid `MessageData` field `quotedMsg` instead of `quotedMsgId`
@@ -2361,10 +2378,11 @@ For a full list of changes, please see our closed Pull Requests:
 
 https://github.com/deltachat/deltachat-core-rust/pulls?q=is%3Apr+is%3Aclosed
 
-[unreleased]: https://github.com/deltachat/deltachat-core-rust/compare/v1.112.4...HEAD
+[unreleased]: https://github.com/deltachat/deltachat-core-rust/compare/v1.112.5...HEAD
 [1.111.0]: https://github.com/deltachat/deltachat-core-rust/compare/v1.110.0...v1.111.0
 [1.112.0]: https://github.com/deltachat/deltachat-core-rust/compare/v1.111.0...v1.112.0
 [1.112.1]: https://github.com/deltachat/deltachat-core-rust/compare/v1.112.0...v1.112.1
 [1.112.2]: https://github.com/deltachat/deltachat-core-rust/compare/v1.112.1...v1.112.2
 [1.112.3]: https://github.com/deltachat/deltachat-core-rust/compare/v1.112.2...v1.112.3
 [1.112.4]: https://github.com/deltachat/deltachat-core-rust/compare/v1.112.3...v1.112.4
+[1.112.5]: https://github.com/deltachat/deltachat-core-rust/compare/v1.112.4...v1.112.5

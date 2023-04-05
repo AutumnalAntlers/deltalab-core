@@ -91,7 +91,7 @@ pub async fn imex(
     let cancel = context.alloc_ongoing().await?;
 
     let res = {
-        let _guard = context.scheduler.pause(context.clone()).await;
+        let _guard = context.scheduler.pause(context.clone()).await?;
         imex_inner(context, what, path, passphrase)
             .race(async {
                 cancel.recv().await.ok();
@@ -397,8 +397,7 @@ async fn imex_inner(
             export_backup(context, path, passphrase.unwrap_or_default()).await
         }
         ImexMode::ImportBackup => {
-            import_backup(context, path, passphrase.unwrap_or_default()).await?;
-            context.sql.run_migrations(context).await
+            import_backup(context, path, passphrase.unwrap_or_default()).await
         }
     }
 }
@@ -474,6 +473,7 @@ async fn import_backup(
         }
     }
 
+    context.sql.run_migrations(context).await?;
     delete_and_reset_all_device_msgs(context).await?;
 
     Ok(())
