@@ -18,7 +18,10 @@ use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::task;
 
-use crate::chat::{self, Chat, ChatId, MessageListOptions};
+use crate::chat::{
+    self, add_to_chat_contacts_table, create_group_chat, Chat, ChatId, MessageListOptions,
+    ProtectionStatus,
+};
 use crate::chatlist::Chatlist;
 use crate::config::Config;
 use crate::constants::Chattype;
@@ -103,9 +106,17 @@ impl TestContextManager {
     /// - Let the other TestContext receive it and accept the chat
     /// - Assert that the message arrived
     pub async fn send_recv_accept(&self, from: &TestContext, to: &TestContext, msg: &str) {
+        let received_msg = self.send_recv(from, to, msg).await;
+        received_msg.chat_id.accept(to).await.unwrap();
+    }
+
+    /// - Let one TestContext send a message
+    /// - Let the other TestContext receive it
+    /// - Assert that the message arrived
+    pub async fn send_recv(&self, from: &TestContext, to: &TestContext, msg: &str) -> Message {
         let received_msg = self.try_send_recv(from, to, msg).await;
         assert_eq!(received_msg.text.as_ref().unwrap(), msg);
-        received_msg.chat_id.accept(to).await.unwrap();
+        received_msg
     }
 
     /// - Let one TestContext send a message
@@ -425,7 +436,7 @@ impl TestContext {
         };
         self.ctx
             .sql
-            .execute("DELETE FROM smtp WHERE id=?;", paramsv![rowid])
+            .execute("DELETE FROM smtp WHERE id=?;", (rowid,))
             .await
             .expect("failed to remove job");
         update_msg_state(&self.ctx, msg_id, MessageState::OutDelivered)
@@ -701,6 +712,25 @@ impl TestContext {
                 "--------------------------------------------------------------------------------"
             );
         }
+    }
+
+    pub async fn create_group_with_members(
+        &self,
+        protect: ProtectionStatus,
+        chat_name: &str,
+        members: &[&TestContext],
+    ) -> ChatId {
+        let chat_id = create_group_chat(self, protect, chat_name).await.unwrap();
+        let mut to_add = vec![];
+        for member in members {
+            let contact = self.add_or_lookup_contact(member).await;
+            to_add.push(contact.id);
+        }
+        add_to_chat_contacts_table(self, chat_id, &to_add)
+            .await
+            .unwrap();
+
+        chat_id
     }
 }
 

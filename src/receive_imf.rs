@@ -37,7 +37,9 @@ use crate::reaction::{set_msg_reaction, Reaction};
 use crate::securejoin::{self, handle_securejoin_handshake, observe_securejoin_on_other_device};
 use crate::sql;
 use crate::stock_str;
-use crate::tools::{buf_compress, extract_grpid_from_rfc724_mid, smeared_time};
+use crate::tools::{
+    buf_compress, extract_grpid_from_rfc724_mid, smeared_time, strip_rtlo_characters,
+};
 use crate::{contact, imap};
 
 /// This is the struct that is returned after receiving one email (aka MIME message).
@@ -116,7 +118,7 @@ pub(crate) async fn receive_imf_inner(
                     .sql
                     .execute(
                         "INSERT INTO msgs(rfc724_mid, chat_id) VALUES (?,?)",
-                        paramsv![rfc724_mid, DC_CHAT_ID_TRASH],
+                        (rfc724_mid, DC_CHAT_ID_TRASH),
                     )
                     .await?;
                 msg_ids = vec![MsgId::new(u32::try_from(row_id)?)];
@@ -307,28 +309,25 @@ pub(crate) async fn receive_imf_inner(
         }
     }
 
-    // Always update the status, even if there is no footer, to allow removing the status.
-    //
-    // Ignore MDNs though, as they never contain the signature even if user has set it.
     // Ignore footers from mailinglists as they are often created or modified by the mailinglist software.
-    if mime_parser.mdn_reports.is_empty()
-        && !mime_parser.is_mailinglist_message()
-        && is_partial_download.is_none()
-        && from_id != ContactId::UNDEFINED
-        && context
-            .update_contacts_timestamp(from_id, Param::StatusTimestamp, sent_timestamp)
-            .await?
-    {
-        if let Err(err) = contact::set_status(
-            context,
-            from_id,
-            mime_parser.footer.clone().unwrap_or_default(),
-            mime_parser.was_encrypted(),
-            mime_parser.has_chat_version(),
-        )
-        .await
+    if let Some(footer) = &mime_parser.footer {
+        if !mime_parser.is_mailinglist_message()
+            && from_id != ContactId::UNDEFINED
+            && context
+                .update_contacts_timestamp(from_id, Param::StatusTimestamp, sent_timestamp)
+                .await?
         {
-            warn!(context, "Cannot update contact status: {err:#}.");
+            if let Err(err) = contact::set_status(
+                context,
+                from_id,
+                footer.to_string(),
+                mime_parser.was_encrypted(),
+                mime_parser.has_chat_version(),
+            )
+            .await
+            {
+                warn!(context, "Cannot update contact status: {err:#}.");
+            }
         }
     }
 
@@ -344,7 +343,7 @@ pub(crate) async fn receive_imf_inner(
                 .sql
                 .execute(
                     "UPDATE imap SET target=? WHERE rfc724_mid=?",
-                    paramsv![target, rfc724_mid],
+                    (target, rfc724_mid),
                 )
                 .await?;
         } else if !mime_parser.mdn_reports.is_empty() && mime_parser.has_chat_version() {
@@ -361,6 +360,7 @@ pub(crate) async fn receive_imf_inner(
             chat_id.emit_msg_event(context, *msg_id, incoming && fresh);
         }
     }
+    context.new_msgs_notify.notify_one();
 
     mime_parser
         .handle_reports(context, from_id, sent_timestamp, &mime_parser.parts)
@@ -551,17 +551,17 @@ async fn add_parts(
         // signals whether the current user is a bot
         let is_bot = context.get_config_bool(Config::Bot).await?;
 
+        let create_blocked = match test_normal_chat {
+            Some(ChatIdBlocked {
+                id: _,
+                blocked: Blocked::Request,
+            }) if is_bot => Blocked::Not,
+            Some(ChatIdBlocked { id: _, blocked }) => blocked,
+            None => Blocked::Request,
+        };
+
         if chat_id.is_none() {
             // try to create a group
-
-            let create_blocked = match test_normal_chat {
-                Some(ChatIdBlocked {
-                    id: _,
-                    blocked: Blocked::Not,
-                }) => Blocked::Not,
-                _ if is_bot => Blocked::Not,
-                _ => Blocked::Request,
-            };
 
             if let Some((new_chat_id, new_chat_id_blocked)) = create_or_lookup_group(
                 context,
@@ -579,13 +579,15 @@ async fn add_parts(
             {
                 chat_id = Some(new_chat_id);
                 chat_id_blocked = new_chat_id_blocked;
+            }
+        }
 
-                // if the chat is somehow blocked but we want to create a non-blocked chat,
-                // unblock the chat
-                if chat_id_blocked != Blocked::Not && create_blocked == Blocked::Not {
-                    new_chat_id.unblock(context).await?;
-                    chat_id_blocked = Blocked::Not;
-                }
+        // if the chat is somehow blocked but we want to create a non-blocked chat,
+        // unblock the chat
+        if chat_id_blocked != Blocked::Not && create_blocked != Blocked::Yes {
+            if let Some(chat_id) = chat_id {
+                chat_id.set_blocked(context, create_blocked).await?;
+                chat_id_blocked = create_blocked;
             }
         }
 
@@ -1076,7 +1078,7 @@ async fn add_parts(
 
     let mut created_db_entries = Vec::with_capacity(mime_parser.parts.len());
 
-    for part in &mime_parser.parts {
+    for part in &mut mime_parser.parts {
         if part.is_reaction {
             set_msg_reaction(
                 context,
@@ -1092,6 +1094,7 @@ async fn add_parts(
         if is_system_message != SystemMessage::Unknown {
             param.set_int(Param::Cmd, is_system_message as i32);
         }
+
         if let Some(replace_msg_id) = replace_msg_id {
             let placeholder = Message::load_from_db(context, replace_msg_id).await?;
             for key in [
@@ -1361,7 +1364,7 @@ async fn calc_sort_timestamp(
             .sql
             .query_get_value(
                 "SELECT MAX(timestamp) FROM msgs WHERE chat_id=? AND state>?",
-                paramsv![chat_id, MessageState::InFresh],
+                (chat_id, MessageState::InFresh),
             )
             .await?;
 
@@ -1680,7 +1683,7 @@ async fn apply_group_changes(
                         .sql
                         .execute(
                             "UPDATE chats SET name=? WHERE id=?;",
-                            paramsv![grpname.to_string(), chat_id],
+                            (strip_rtlo_characters(grpname), chat_id),
                         )
                         .await?;
                     send_event_chat_modified = true;
@@ -1750,10 +1753,7 @@ async fn apply_group_changes(
                 // start from scratch.
                 context
                     .sql
-                    .execute(
-                        "DELETE FROM chats_contacts WHERE chat_id=?;",
-                        paramsv![chat_id],
-                    )
+                    .execute("DELETE FROM chats_contacts WHERE chat_id=?;", (chat_id,))
                     .await?;
 
                 members_to_add.push(ContactId::SELF);

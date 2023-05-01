@@ -1,6 +1,6 @@
 [package]
 name = "deltachat"
-version = "1.112.6"
+version = "1.114.0"
 edition = "2021"
 license = "MPL-2.0"
 rust-version = "1.65"
@@ -36,7 +36,7 @@ ratelimit = { path = "./deltachat-ratelimit" }
 
 anyhow = "1"
 async-channel = "1.8.0"
-async-imap = { version = "0.7.0", default-features = false, features = ["runtime-tokio"] }
+async-imap = { version = "0.8.0", default-features = false, features = ["runtime-tokio"] }
 async-native-tls = { version = "0.5", default-features = false, features = ["runtime-tokio"] }
 async-smtp = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
 async_zip = { version = "0.0.12", default-features = false, features = ["deflate", "fs"] }
@@ -58,6 +58,7 @@ kamadak-exif = "0.5"
 lettre_email = { git = "https://github.com/deltachat/lettre", branch = "master" }
 libc = "0.2"
 mailparse = "0.14"
+mime = "0.3.17"
 num_cpus = "1.15"
 num-derive = "0.3"
 num-traits = "0.2"

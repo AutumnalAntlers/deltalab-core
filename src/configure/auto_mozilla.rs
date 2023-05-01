@@ -1,15 +1,15 @@
 //! # Thunderbird's Autoconfiguration implementation
 //!
-//! Documentation: <https://developer.mozilla.org/en-US/docs/Mozilla/Thunderbird/Autoconfiguration>
+//! Documentation: <https://web.archive.org/web/20210624004729/https://developer.mozilla.org/en-US/docs/Mozilla/Thunderbird/Autoconfiguration>
 use std::io::BufRead;
 use std::str::FromStr;
 
 use quick_xml::events::{BytesStart, Event};
 
-use super::read_url::read_url;
 use super::{Error, ServerParams};
 use crate::context::Context;
 use crate::login_param::LoginParam;
+use crate::net::read_url;
 use crate::provider::{Protocol, Socket};
 
 #[derive(Debug)]

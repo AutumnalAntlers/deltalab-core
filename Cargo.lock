@@ -204,12 +204,11 @@ dependencies = [
 
 [[package]]
 name = "async-imap"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8379e2f1cdeb79afd2006932d7e8f64993fc0f7386d0ebc37231c90b05968c25"
+checksum = "d11e163a705d0c809dfc886eee95df5117c758539c940c0fe9aa3aa4da5388ce"
 dependencies = [
  "async-channel",
- "async-native-tls 0.4.0",
  "base64 0.21.0",
  "byte-pool",
  "chrono",
@@ -232,18 +231,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "479db852db25d9dbf6204e6cb6253698f175c15726470f78af0d918e99d6156e"
 dependencies = [
  "event-listener",
-]
-
-[[package]]
-name = "async-native-tls"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d57d4cec3c647232e1094dc013546c0b33ce785d8aeb251e1f20dfaf8a9a13fe"
-dependencies = [
- "native-tls",
- "thiserror",
- "tokio",
- "url",
 ]
 
 [[package]]
@@ -553,9 +540,9 @@ checksum = "0d261e256854913907f67ed06efbc3338dfe6179796deefc1ff763fc1aee5535"
 
 [[package]]
 name = "byte-pool"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8c7230ddbb427b1094d477d821a99f3f54d36333178eeb806e279bcdcecf0ca"
+checksum = "c2f1b21189f50b5625efa6227cf45e9d4cfdc2e73582df2b879e9689e78a7158"
 dependencies = [
  "crossbeam-queue",
  "stable_deref_trait",
@@ -905,9 +892,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.7"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf2b3e8478797446514c91ef04bafcb59faba183e621ad488df88983cc14128c"
+checksum = "a33c2bf77f2df06183c3aa30d1e96c0695a313d4f9c453cc3762a6db39f99200"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
@@ -1157,13 +1144,13 @@ dependencies = [
 
 [[package]]
 name = "deltachat"
-version = "1.112.6"
+version = "1.114.0"
 dependencies = [
  "ansi_term",
  "anyhow",
  "async-channel",
  "async-imap",
- "async-native-tls 0.5.0",
+ "async-native-tls",
  "async-smtp",
  "async_zip",
  "backtrace",
@@ -1188,6 +1175,7 @@ dependencies = [
  "libc",
  "log",
  "mailparse",
+ "mime",
  "num-derive",
  "num-traits",
  "num_cpus",
@@ -1231,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat-jsonrpc"
-version = "1.112.6"
+version = "1.114.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1254,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat-repl"
-version = "1.112.6"
+version = "1.114.0"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1269,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat-rpc-server"
-version = "1.112.6"
+version = "1.114.0"
 dependencies = [
  "anyhow",
  "deltachat",
@@ -1280,6 +1268,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "yerpc",
 ]
 
@@ -1293,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "deltachat_ffi"
-version = "1.112.6"
+version = "1.114.0"
 dependencies = [
  "anyhow",
  "deltachat",
@@ -2176,9 +2165,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.16"
+version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be7b54589b581f624f566bf5d8eb2bab1db736c51528720b6bd36b96b55924d"
+checksum = "17f8a914c2987b688368b5138aa05321db91f4090cf26118185672ad588bce21"
 dependencies = [
  "bytes",
  "fnv",
@@ -2818,9 +2807,9 @@ dependencies = [
 
 [[package]]
 name = "mime"
-version = "0.3.16"
+version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a60c7ce501c71e03a9c9c0d35b861413ae925bd979cc7a4e30d060069aaac8d"
+checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
 name = "minimal-lexical"

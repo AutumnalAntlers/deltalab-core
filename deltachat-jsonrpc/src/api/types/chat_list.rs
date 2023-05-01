@@ -1,22 +1,17 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use deltachat::chat::{Chat, ChatId};
+use deltachat::chatlist::get_last_message_for_chat;
 use deltachat::constants::*;
 use deltachat::contact::{Contact, ContactId};
 use deltachat::{
     chat::{get_chat_contacts, ChatVisibility},
     chatlist::Chatlist,
 };
-use deltachat::{
-    chat::{Chat, ChatId},
-    message::MsgId,
-};
 use num_traits::cast::ToPrimitive;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use typescript_type_def::TypeDef;
 
 use super::color_int_to_hex_string;
-
-#[derive(Deserialize, Serialize, TypeDef)]
-pub struct ChatListEntry(pub u32, pub u32);
 
 #[derive(Serialize, TypeDef)]
 #[serde(tag = "type")]
@@ -56,14 +51,9 @@ pub enum ChatListItemFetchResult {
 
 pub(crate) async fn get_chat_list_item_by_id(
     ctx: &deltachat::context::Context,
-    entry: &ChatListEntry,
+    entry: u32,
 ) -> Result<ChatListItemFetchResult> {
-    let chat_id = ChatId::new(entry.0);
-    let last_msgid = match entry.1 {
-        0 => None,
-        _ => Some(MsgId::new(entry.1)),
-    };
-
+    let chat_id = ChatId::new(entry);
     let fresh_message_counter = chat_id.get_fresh_msg_cnt(ctx).await?;
 
     if chat_id.is_archived_link() {
@@ -72,8 +62,12 @@ pub(crate) async fn get_chat_list_item_by_id(
         });
     }
 
-    let chat = Chat::load_from_db(ctx, chat_id).await?;
-    let summary = Chatlist::get_summary2(ctx, chat_id, last_msgid, Some(&chat)).await?;
+    let last_msgid = get_last_message_for_chat(ctx, chat_id).await?;
+
+    let chat = Chat::load_from_db(ctx, chat_id).await.context("chat")?;
+    let summary = Chatlist::get_summary2(ctx, chat_id, last_msgid, Some(&chat))
+        .await
+        .context("summary")?;
 
     let summary_text1 = summary.prefix.map_or_else(String::new, |s| s.to_string());
     let summary_text2 = summary.text.to_owned();
@@ -101,7 +95,8 @@ pub(crate) async fn get_chat_list_item_by_id(
         let contact = chat_contacts.get(0);
         let was_seen_recently = match contact {
             Some(contact) => Contact::load_from_db(ctx, *contact)
-                .await?
+                .await
+                .context("contact")?
                 .was_seen_recently(),
             None => false,
         };

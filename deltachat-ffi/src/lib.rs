@@ -31,6 +31,7 @@ use deltachat::ephemeral::Timer as EphemeralTimer;
 use deltachat::imex::BackupProvider;
 use deltachat::key::DcKey;
 use deltachat::message::MsgId;
+use deltachat::net::read_url_blob;
 use deltachat::qr_code_generator::{generate_backup_qr, get_securejoin_qr_svg};
 use deltachat::reaction::{get_msg_reactions, send_reaction, Reactions};
 use deltachat::stock_str::StockMessage;
@@ -1278,6 +1279,50 @@ pub unsafe extern "C" fn dc_get_fresh_msgs(
         );
         Box::into_raw(Box::new(arr))
     })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_get_next_msgs(context: *mut dc_context_t) -> *mut dc_array::dc_array_t {
+    if context.is_null() {
+        eprintln!("ignoring careless call to dc_get_next_msgs()");
+        return ptr::null_mut();
+    }
+    let ctx = &*context;
+
+    let msg_ids = block_on(ctx.get_next_msgs())
+        .context("failed to get next messages")
+        .log_err(ctx)
+        .unwrap_or_default();
+    let arr = dc_array_t::from(
+        msg_ids
+            .iter()
+            .map(|msg_id| msg_id.to_u32())
+            .collect::<Vec<u32>>(),
+    );
+    Box::into_raw(Box::new(arr))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_wait_next_msgs(
+    context: *mut dc_context_t,
+) -> *mut dc_array::dc_array_t {
+    if context.is_null() {
+        eprintln!("ignoring careless call to dc_wait_next_msgs()");
+        return ptr::null_mut();
+    }
+    let ctx = &*context;
+
+    let msg_ids = block_on(ctx.wait_next_msgs())
+        .context("failed to wait for next messages")
+        .log_err(ctx)
+        .unwrap_or_default();
+    let arr = dc_array_t::from(
+        msg_ids
+            .iter()
+            .map(|msg_id| msg_id.to_u32())
+            .collect::<Vec<u32>>(),
+    );
+    Box::into_raw(Box::new(arr))
 }
 
 #[no_mangle]
@@ -4528,6 +4573,96 @@ pub unsafe extern "C" fn dc_provider_unref(provider: *mut dc_provider_t) {
     // this may change once we start localizing string.
 }
 
+// dc_http_response_t
+
+pub type dc_http_response_t = net::HttpResponse;
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_get_http_response(
+    context: *const dc_context_t,
+    url: *const libc::c_char,
+) -> *mut dc_http_response_t {
+    if context.is_null() || url.is_null() {
+        eprintln!("ignoring careless call to dc_get_http_response()");
+        return ptr::null_mut();
+    }
+
+    let context = &*context;
+    let url = to_string_lossy(url);
+    if let Ok(response) = block_on(read_url_blob(context, &url))
+        .context("read_url_blob")
+        .log_err(context)
+    {
+        Box::into_raw(Box::new(response))
+    } else {
+        ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_http_response_get_mimetype(
+    response: *const dc_http_response_t,
+) -> *mut libc::c_char {
+    if response.is_null() {
+        eprintln!("ignoring careless call to dc_http_response_get_mimetype()");
+        return ptr::null_mut();
+    }
+
+    let response = &*response;
+    response.mimetype.strdup()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_http_response_get_encoding(
+    response: *const dc_http_response_t,
+) -> *mut libc::c_char {
+    if response.is_null() {
+        eprintln!("ignoring careless call to dc_http_response_get_encoding()");
+        return ptr::null_mut();
+    }
+
+    let response = &*response;
+    response.encoding.strdup()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_http_response_get_blob(
+    response: *const dc_http_response_t,
+) -> *mut libc::c_char {
+    if response.is_null() {
+        eprintln!("ignoring careless call to dc_http_response_get_blob()");
+        return ptr::null_mut();
+    }
+
+    let response = &*response;
+    let blob_len = response.blob.len();
+    let ptr = libc::malloc(blob_len);
+    libc::memcpy(ptr, response.blob.as_ptr() as *mut libc::c_void, blob_len);
+    ptr as *mut libc::c_char
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_http_response_get_size(
+    response: *const dc_http_response_t,
+) -> libc::size_t {
+    if response.is_null() {
+        eprintln!("ignoring careless call to dc_http_response_get_size()");
+        return 0;
+    }
+
+    let response = &*response;
+    response.blob.len()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dc_http_response_unref(response: *mut dc_http_response_t) {
+    if response.is_null() {
+        eprintln!("ignoring careless call to dc_http_response_unref()");
+        return;
+    }
+    drop(Box::from_raw(response));
+}
+
 // -- Accounts
 
 /// Reader-writer lock wrapper for accounts manager to guarantee thread safety when using
@@ -4832,7 +4967,6 @@ pub unsafe extern "C" fn dc_accounts_get_event_emitter(
 #[cfg(feature = "jsonrpc")]
 mod jsonrpc {
     use deltachat_jsonrpc::api::CommandApi;
-    use deltachat_jsonrpc::events::event_to_json_rpc_notification;
     use deltachat_jsonrpc::yerpc::{OutReceiver, RpcClient, RpcSession};
 
     use super::*;
@@ -4840,7 +4974,6 @@ mod jsonrpc {
     pub struct dc_jsonrpc_instance_t {
         receiver: OutReceiver,
         handle: RpcSession<CommandApi>,
-        event_thread: JoinHandle<Result<(), anyhow::Error>>,
     }
 
     #[no_mangle]
@@ -4853,28 +4986,12 @@ mod jsonrpc {
         }
 
         let account_manager = &*account_manager;
-        let events = block_on(account_manager.read()).get_event_emitter();
         let cmd_api = deltachat_jsonrpc::api::CommandApi::from_arc(account_manager.inner.clone());
 
         let (request_handle, receiver) = RpcClient::new();
-        let handle = RpcSession::new(request_handle.clone(), cmd_api);
+        let handle = RpcSession::new(request_handle, cmd_api);
 
-        let event_thread = spawn(async move {
-            while let Some(event) = events.recv().await {
-                let event = event_to_json_rpc_notification(event);
-                request_handle
-                    .send_notification("event", Some(event))
-                    .await?;
-            }
-            let res: Result<(), anyhow::Error> = Ok(());
-            res
-        });
-
-        let instance = dc_jsonrpc_instance_t {
-            receiver,
-            handle,
-            event_thread,
-        };
+        let instance = dc_jsonrpc_instance_t { receiver, handle };
 
         Box::into_raw(Box::new(instance))
     }
@@ -4885,7 +5002,6 @@ mod jsonrpc {
             eprintln!("ignoring careless call to dc_jsonrpc_unref()");
             return;
         }
-        (*jsonrpc_instance).event_thread.abort();
         drop(Box::from_raw(jsonrpc_instance));
     }
 

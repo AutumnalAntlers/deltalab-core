@@ -33,7 +33,7 @@ use crate::peerstate::Peerstate;
 use crate::simplify::{simplify, SimplifiedText};
 use crate::stock_str;
 use crate::sync::SyncItems;
-use crate::tools::{get_filemeta, parse_receive_headers, truncate_by_lines};
+use crate::tools::{get_filemeta, parse_receive_headers, strip_rtlo_characters, truncate_by_lines};
 use crate::{location, tools};
 
 /// A parsed MIME message.
@@ -90,6 +90,9 @@ pub(crate) struct MimeMessage {
     pub(crate) delivery_report: Option<DeliveryReport>,
 
     /// Standard USENET signature, if any.
+    ///
+    /// `None` means no text part was received, empty string means a text part without a footer is
+    /// received.
     pub(crate) footer: Option<String>,
 
     // if this flag is set, the parts/text/etc. are just close to the original mime-message;
@@ -1057,6 +1060,7 @@ impl MimeMessage {
                             }
                         };
 
+                        let is_plaintext = mime_type == mime::TEXT_PLAIN;
                         let mut dehtml_failed = false;
 
                         let SimplifiedText {
@@ -1137,7 +1141,9 @@ impl MimeMessage {
                             self.is_forwarded = true;
                         }
 
-                        self.footer = footer;
+                        if self.footer.is_none() && is_plaintext {
+                            self.footer = Some(footer.unwrap_or_default());
+                        }
                     }
                     _ => {}
                 }
@@ -1666,10 +1672,7 @@ impl MimeMessage {
         {
             context
                 .sql
-                .query_get_value(
-                    "SELECT timestamp FROM msgs WHERE rfc724_mid=?",
-                    paramsv![field],
-                )
+                .query_get_value("SELECT timestamp FROM msgs WHERE rfc724_mid=?", (field,))
                 .await?
         } else {
             None
@@ -1948,6 +1951,8 @@ fn get_attachment_filename(
             );
         };
     }
+
+    let desired_filename = desired_filename.map(|filename| strip_rtlo_characters(&filename));
 
     Ok(desired_filename)
 }
@@ -2347,7 +2352,7 @@ mod tests {
             .sql
             .execute(
                 "INSERT INTO msgs (rfc724_mid, timestamp) VALUES(?,?)",
-                paramsv!["Gr.beZgAF2Nn0-.oyaJOpeuT70@example.org", timestamp],
+                ("Gr.beZgAF2Nn0-.oyaJOpeuT70@example.org", timestamp),
             )
             .await
             .expect("Failed to write to the database");

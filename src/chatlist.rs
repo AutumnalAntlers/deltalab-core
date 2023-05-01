@@ -137,7 +137,7 @@ impl Chatlist {
                    AND c.id IN(SELECT chat_id FROM chats_contacts WHERE contact_id=?2)
                  GROUP BY c.id
                  ORDER BY c.archived=?3 DESC, IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;",
-                paramsv![MessageState::OutDraft, query_contact_id, ChatVisibility::Pinned],
+                (MessageState::OutDraft, query_contact_id, ChatVisibility::Pinned),
                 process_row,
                 process_rows,
             ).await?
@@ -164,7 +164,7 @@ impl Chatlist {
                    AND c.archived=1
                  GROUP BY c.id
                  ORDER BY IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;",
-                    paramsv![MessageState::OutDraft],
+                    (MessageState::OutDraft,),
                     process_row,
                     process_rows,
                 )
@@ -198,7 +198,7 @@ impl Chatlist {
                    AND c.name LIKE ?3
                  GROUP BY c.id
                  ORDER BY IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;",
-                    paramsv![MessageState::OutDraft, skip_id, str_like_cmd],
+                    (MessageState::OutDraft, skip_id, str_like_cmd),
                     process_row,
                     process_rows,
                 )
@@ -228,7 +228,7 @@ impl Chatlist {
                    AND NOT c.archived=?4
                  GROUP BY c.id
                  ORDER BY c.id=?5 DESC, c.archived=?6 DESC, IFNULL(m.timestamp,c.created_timestamp) DESC, m.id DESC;",
-                paramsv![MessageState::OutDraft, skip_id, flag_for_forwarding, ChatVisibility::Archived, sort_id_up, ChatVisibility::Pinned],
+                (MessageState::OutDraft, skip_id, flag_for_forwarding, ChatVisibility::Archived, sort_id_up, ChatVisibility::Pinned),
                 process_row,
                 process_rows,
             ).await?;
@@ -311,13 +311,17 @@ impl Chatlist {
         };
 
         let (lastmsg, lastcontact) = if let Some(lastmsg_id) = lastmsg_id {
-            let lastmsg = Message::load_from_db(context, lastmsg_id).await?;
+            let lastmsg = Message::load_from_db(context, lastmsg_id)
+                .await
+                .context("loading message failed")?;
             if lastmsg.from_id == ContactId::SELF {
                 (Some(lastmsg), None)
             } else {
                 match chat.typ {
                     Chattype::Group | Chattype::Broadcast | Chattype::Mailinglist => {
-                        let lastcontact = Contact::load_from_db(context, lastmsg.from_id).await?;
+                        let lastcontact = Contact::load_from_db(context, lastmsg.from_id)
+                            .await
+                            .context("loading contact failed")?;
                         (Some(lastmsg), Some(lastcontact))
                     }
                     Chattype::Single | Chattype::Undefined => (Some(lastmsg), None),
@@ -356,10 +360,29 @@ pub async fn get_archived_cnt(context: &Context) -> Result<usize> {
         .sql
         .count(
             "SELECT COUNT(*) FROM chats WHERE blocked!=? AND archived=?;",
-            paramsv![Blocked::Yes, ChatVisibility::Archived],
+            (Blocked::Yes, ChatVisibility::Archived),
         )
         .await?;
     Ok(count)
+}
+
+/// Gets the last message of a chat, the message that would also be displayed in the ChatList
+/// Used for passing to `deltachat::chatlist::Chatlist::get_summary2`
+pub async fn get_last_message_for_chat(
+    context: &Context,
+    chat_id: ChatId,
+) -> Result<Option<MsgId>> {
+    context
+        .sql
+        .query_get_value(
+            "SELECT id
+                FROM msgs
+                WHERE chat_id=?2
+                AND (hidden=0 OR state=?1)
+                ORDER BY timestamp DESC, id DESC LIMIT 1",
+            (MessageState::OutDraft, chat_id),
+        )
+        .await
 }
 
 #[cfg(test)]

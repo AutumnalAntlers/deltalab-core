@@ -41,13 +41,14 @@ pub mod types;
 use num_traits::FromPrimitive;
 use types::account::Account;
 use types::chat::FullChat;
-use types::chat_list::ChatListEntry;
 use types::contact::ContactObject;
+use types::http::HttpResponse;
 use types::message::MessageData;
 use types::message::MessageObject;
 use types::provider_info::ProviderInfo;
 use types::webxdc::WebxdcMessageInfo;
 
+use self::events::Event;
 use self::types::message::MessageLoadResult;
 use self::types::{
     chat::{BasicChat, JSONRPCChatVisibility, MuteDuration},
@@ -164,6 +165,16 @@ impl CommandApi {
         get_info()
     }
 
+    /// Get the next event.
+    async fn get_next_event(&self) -> Result<Event> {
+        let event_emitter = self.accounts.read().await.get_event_emitter();
+        event_emitter
+            .recv()
+            .await
+            .map(|event| event.into())
+            .context("event channel is closed")
+    }
+
     // ---------------------------------------------
     // Account Management
     // ---------------------------------------------
@@ -205,8 +216,6 @@ impl CommandApi {
             let context_option = self.accounts.read().await.get_account(id);
             if let Some(ctx) = context_option {
                 accounts.push(Account::from_context(&ctx, id).await?)
-            } else {
-                println!("account with id {id} doesn't exist anymore");
             }
         }
         Ok(accounts)
@@ -453,6 +462,49 @@ impl CommandApi {
         ChatId::new(chat_id).get_fresh_msg_cnt(&ctx).await
     }
 
+    /// Gets messages to be processed by the bot and returns their IDs.
+    ///
+    /// Only messages with database ID higher than `last_msg_id` config value
+    /// are returned. After processing the messages, the bot should
+    /// update `last_msg_id` by calling [`markseen_msgs`]
+    /// or manually updating the value to avoid getting already
+    /// processed messages.
+    ///
+    /// [`markseen_msgs`]: Self::markseen_msgs
+    async fn get_next_msgs(&self, account_id: u32) -> Result<Vec<u32>> {
+        let ctx = self.get_context(account_id).await?;
+        let msg_ids = ctx
+            .get_next_msgs()
+            .await?
+            .iter()
+            .map(|msg_id| msg_id.to_u32())
+            .collect();
+        Ok(msg_ids)
+    }
+
+    /// Waits for messages to be processed by the bot and returns their IDs.
+    ///
+    /// This function is similar to [`get_next_msgs`],
+    /// but waits for internal new message notification before returning.
+    /// New message notification is sent when new message is added to the database,
+    /// on initialization, when I/O is started and when I/O is stopped.
+    /// This allows bots to use `wait_next_msgs` in a loop to process
+    /// old messages after initialization and during the bot runtime.
+    /// To shutdown the bot, stopping I/O can be used to interrupt
+    /// pending or next `wait_next_msgs` call.
+    ///
+    /// [`get_next_msgs`]: Self::get_next_msgs
+    async fn wait_next_msgs(&self, account_id: u32) -> Result<Vec<u32>> {
+        let ctx = self.get_context(account_id).await?;
+        let msg_ids = ctx
+            .wait_next_msgs()
+            .await?
+            .iter()
+            .map(|msg_id| msg_id.to_u32())
+            .collect();
+        Ok(msg_ids)
+    }
+
     /// Estimate the number of messages that will be deleted
     /// by the set_config()-options `delete_device_after` or `delete_server_after`.
     /// This is typically used to show the estimated impact to the user
@@ -496,7 +548,7 @@ impl CommandApi {
         list_flags: Option<u32>,
         query_string: Option<String>,
         query_contact_id: Option<u32>,
-    ) -> Result<Vec<ChatListEntry>> {
+    ) -> Result<Vec<u32>> {
         let ctx = self.get_context(account_id).await?;
         let list = Chatlist::try_load(
             &ctx,
@@ -505,12 +557,9 @@ impl CommandApi {
             query_contact_id.map(ContactId::new),
         )
         .await?;
-        let mut l: Vec<ChatListEntry> = Vec::with_capacity(list.len());
+        let mut l: Vec<u32> = Vec::with_capacity(list.len());
         for i in 0..list.len() {
-            l.push(ChatListEntry(
-                list.get_chat_id(i)?.to_u32(),
-                list.get_msg_id(i)?.unwrap_or_default().to_u32(),
-            ));
+            l.push(list.get_chat_id(i)?.to_u32());
         }
         Ok(l)
     }
@@ -518,19 +567,18 @@ impl CommandApi {
     async fn get_chatlist_items_by_entries(
         &self,
         account_id: u32,
-        entries: Vec<ChatListEntry>,
+        entries: Vec<u32>,
     ) -> Result<HashMap<u32, ChatListItemFetchResult>> {
-        // todo custom json deserializer for ChatListEntry?
         let ctx = self.get_context(account_id).await?;
         let mut result: HashMap<u32, ChatListItemFetchResult> =
             HashMap::with_capacity(entries.len());
-        for entry in entries.iter() {
+        for &entry in entries.iter() {
             result.insert(
-                entry.0,
+                entry,
                 match get_chat_list_item_by_id(&ctx, entry).await {
                     Ok(res) => res,
                     Err(err) => ChatListItemFetchResult::Error {
-                        id: entry.0,
+                        id: entry,
                         error: format!("{err:#}"),
                     },
                 },
@@ -943,6 +991,11 @@ impl CommandApi {
     ///
     /// Moreover, timer is started for incoming ephemeral messages.
     /// This also happens for contact requests chats.
+    ///
+    /// This function updates `last_msg_id` configuration value
+    /// to the maximum of the current value and IDs passed to this function.
+    /// Bots which mark messages as seen can rely on this side effect
+    /// to avoid updating `last_msg_id` value manually.
     ///
     /// One #DC_EVENT_MSGS_NOTICED event is emitted per modified chat.
     async fn markseen_msgs(&self, account_id: u32, msg_ids: Vec<u32>) -> Result<()> {
@@ -1610,6 +1663,15 @@ impl CommandApi {
         Ok(general_purpose::STANDARD_NO_PAD.encode(blob))
     }
 
+    /// Makes an HTTP GET request and returns a response.
+    ///
+    /// `url` is the HTTP or HTTPS URL.
+    async fn get_http_response(&self, account_id: u32, url: String) -> Result<HttpResponse> {
+        let ctx = self.get_context(account_id).await?;
+        let response = deltachat::net::read_url_blob(&ctx, &url).await?.into();
+        Ok(response)
+    }
+
     /// Forward messages to another chat.
     ///
     /// All types of messages can be forwarded,
@@ -1699,6 +1761,15 @@ impl CommandApi {
             .await?
             .to_u32();
         Ok(msg_id)
+    }
+
+    /// Checks if messages can be sent to a given chat.
+    async fn can_send(&self, account_id: u32, chat_id: u32) -> Result<bool> {
+        let ctx = self.get_context(account_id).await?;
+        let chat_id = ChatId::new(chat_id);
+        let chat = Chat::load_from_db(&ctx, chat_id).await?;
+        let can_send = chat.can_send(&ctx).await?;
+        Ok(can_send)
     }
 
     // ---------------------------------------------

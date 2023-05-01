@@ -1,4 +1,4 @@
-///! # Common network utilities.
+//! # Common network utilities.
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::str::FromStr;
@@ -12,8 +12,11 @@ use tokio_io_timeout::TimeoutStream;
 use crate::context::Context;
 use crate::tools::time;
 
+pub(crate) mod http;
 pub(crate) mod session;
 pub(crate) mod tls;
+
+pub use http::{read_url, read_url_blob, Response as HttpResponse};
 
 async fn connect_tcp_inner(addr: SocketAddr, timeout_val: Duration) -> Result<TcpStream> {
     let tcp_stream = timeout(timeout_val, TcpStream::connect(addr))
@@ -75,7 +78,7 @@ async fn lookup_host_with_cache(
                  VALUES (?, ?, ?)
                  ON CONFLICT (hostname, address)
                  DO UPDATE SET timestamp=excluded.timestamp",
-                paramsv![hostname, ip_string, now],
+                (hostname, ip_string, now),
             )
             .await?;
     }
@@ -89,7 +92,7 @@ async fn lookup_host_with_cache(
                  WHERE hostname = ?
                  AND ? < timestamp + 30 * 24 * 3600
                  ORDER BY timestamp DESC",
-                paramsv![hostname, now],
+                (hostname, now),
                 |row| {
                     let address: String = row.get(0)?;
                     Ok(address)
@@ -157,7 +160,7 @@ pub(crate) async fn connect_tcp(
                         "UPDATE dns_cache
                          SET timestamp = ?
                          WHERE address = ?",
-                        paramsv![time(), resolved_addr.ip().to_string()],
+                        (time(), resolved_addr.ip().to_string()),
                     )
                     .await?;
                 break;
