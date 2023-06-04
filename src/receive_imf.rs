@@ -557,7 +557,13 @@ async fn add_parts(
                 blocked: Blocked::Request,
             }) if is_bot => Blocked::Not,
             Some(ChatIdBlocked { id: _, blocked }) => blocked,
-            None => Blocked::Request,
+            None => {
+                if is_bot {
+                    Blocked::Not
+                } else {
+                    Blocked::Request
+                }
+            }
         };
 
         if chat_id.is_none() {
@@ -2077,7 +2083,7 @@ async fn check_verified_properties(
 ) -> Result<()> {
     let contact = Contact::load_from_db(context, from_id).await?;
 
-    ensure!(mimeparser.was_encrypted(), "This message is not encrypted.");
+    ensure!(mimeparser.was_encrypted(), "This message is not encrypted");
 
     if mimeparser.get_header(HeaderDef::ChatVerified).is_none() {
         // we do not fail here currently, this would exclude (a) non-deltas
@@ -2110,7 +2116,7 @@ async fn check_verified_properties(
         if let Some(peerstate) = peerstate {
             ensure!(
                 peerstate.has_verified_key(&mimeparser.signatures),
-                "The message was sent with non-verified encryption."
+                "The message was sent with non-verified encryption"
             );
         }
     }

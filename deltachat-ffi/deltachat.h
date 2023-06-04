@@ -461,8 +461,9 @@ char*           dc_get_blobdir               (const dc_context_t* context);
  *                    If no type is prefixed, the videochat is handled completely in a browser.
  * - `bot`          = Set to "1" if this is a bot.
  *                    Prevents adding the "Device messages" and "Saved messages" chats,
- *                    adds Auto-Submitted header to outgoing messages
- *                    and accepts contact requests automatically (calling dc_accept_chat() is not needed for bots).
+ *                    adds Auto-Submitted header to outgoing messages,
+ *                    accepts contact requests automatically (calling dc_accept_chat() is not needed for bots)
+ *                    and does not cut large incoming text messages.
  * - `last_msg_id` = database ID of the last message processed by the bot.
  *                   This ID and IDs below it are guaranteed not to be returned
  *                   by dc_get_next_msgs() and dc_wait_next_msgs().
@@ -5718,6 +5719,18 @@ void dc_jsonrpc_request(dc_jsonrpc_instance_t* jsonrpc_instance, const char* req
  *     in this case, free the jsonrpc instance using dc_jsonrpc_unref().
  */
 char* dc_jsonrpc_next_response(dc_jsonrpc_instance_t* jsonrpc_instance);
+
+/**
+ * Make a JSON-RPC call and return a response.
+ *
+ * @memberof dc_jsonrpc_instance_t
+ * @param jsonrpc_instance jsonrpc instance as returned from dc_jsonrpc_init().
+ * @param method JSON-RPC method name, e.g. `check_email_validity`.
+ * @param params JSON-RPC method parameters, e.g. `["alice@example.org"]`.
+ * @return JSON-RPC response as string, must be freed using dc_str_unref() after usage.
+ *     On error, NULL is returned.
+ */
+char* dc_jsonrpc_blocking_call(dc_jsonrpc_instance_t* jsonrpc_instance, const char *method, const char *params);
 
 /**
  * @class dc_event_emitter_t

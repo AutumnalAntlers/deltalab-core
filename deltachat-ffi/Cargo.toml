@@ -1,6 +1,6 @@
 [package]
 name = "deltachat_ffi"
-version = "1.114.0"
+version = "1.115.0"
 description = "Deltachat FFI"
 edition = "2018"
 readme = "README.md"
@@ -25,6 +25,7 @@ anyhow = "1"
 thiserror = "1"
 rand = "0.8"
 once_cell = "1.17.0"
+yerpc = { version = "0.5.1", features = ["anyhow_expose"] }
 
 [features]
 default = ["vendored"]

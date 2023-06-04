@@ -545,11 +545,11 @@ pub(crate) async fn send_msg_to_smtp(
             .execute("DELETE FROM smtp WHERE id=?", (rowid,))
             .await
             .context("failed to remove message with exceeded retry limit from smtp table")?;
-        bail!("Number of retries exceeded the limit");
+        return Ok(());
     }
     info!(
         context,
-        "Try number {} to send message {} over SMTP", retries, msg_id
+        "Try number {retries} to send message {msg_id} (entry {rowid}) over SMTP"
     );
 
     let recipients_list = recipients
@@ -573,8 +573,13 @@ pub(crate) async fn send_msg_to_smtp(
     {
         info!(
             context,
-            "Sending of message {} was cancelled by the user.", msg_id
+            "Sending of message {msg_id} (entry {rowid}) was cancelled by the user."
         );
+        context
+            .sql
+            .execute("DELETE FROM smtp WHERE id=?", (rowid,))
+            .await
+            .context("failed to remove cancelled message from smtp table")?;
         return Ok(());
     }
 
@@ -646,6 +651,8 @@ pub(crate) async fn send_smtp_messages(context: &Context, connection: &mut Smtp)
             },
         )
         .await?;
+
+    info!(context, "Selected rows from SMTP queue: {rowids:?}.");
     for rowid in rowids {
         send_msg_to_smtp(context, connection, rowid)
             .await

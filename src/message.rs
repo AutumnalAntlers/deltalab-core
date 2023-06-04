@@ -537,7 +537,9 @@ impl Message {
     /// Returns the size of the file in bytes, if applicable.
     pub async fn get_filebytes(&self, context: &Context) -> Result<Option<u64>> {
         if let Some(path) = self.param.get_path(Param::File, context)? {
-            Ok(Some(get_filebytes(context, &path).await?))
+            Ok(Some(get_filebytes(context, &path).await.with_context(
+                || format!("failed to get {} size in bytes", path.display()),
+            )?))
         } else {
             Ok(None)
         }
@@ -1086,6 +1088,26 @@ impl MessageState {
     }
 }
 
+/// Returns contacts that sent read receipts and the time of reading.
+pub async fn get_msg_read_receipts(
+    context: &Context,
+    msg_id: MsgId,
+) -> Result<Vec<(ContactId, i64)>> {
+    context
+        .sql
+        .query_map(
+            "SELECT contact_id, timestamp_sent FROM msgs_mdns WHERE msg_id=?",
+            (msg_id,),
+            |row| {
+                let contact_id: ContactId = row.get(0)?;
+                let ts: i64 = row.get(1)?;
+                Ok((contact_id, ts))
+            },
+            |rows| rows.collect::<Result<Vec<_>, _>>().map_err(Into::into),
+        )
+        .await
+}
+
 /// Returns detailed message information in a multi-line text form.
 pub async fn get_msg_info(context: &Context, msg_id: MsgId) -> Result<String> {
     let msg = Message::load_from_db(context, msg_id).await?;
@@ -1399,8 +1421,8 @@ pub async fn get_mime_headers(context: &Context, msg_id: MsgId) -> Result<Vec<u8
 /// by moving them to the trash chat
 /// and scheduling for deletion on IMAP.
 pub async fn delete_msgs(context: &Context, msg_ids: &[MsgId]) -> Result<()> {
-    for msg_id in msg_ids.iter() {
-        let msg = Message::load_from_db(context, *msg_id).await?;
+    for &msg_id in msg_ids {
+        let msg = Message::load_from_db(context, msg_id).await?;
         if msg.location_id > 0 {
             delete_poi_location(context, msg.location_id).await?;
         }
@@ -1410,7 +1432,7 @@ pub async fn delete_msgs(context: &Context, msg_ids: &[MsgId]) -> Result<()> {
             .with_context(|| format!("Unable to trash message {msg_id}"))?;
 
         if msg.viewtype == Viewtype::Webxdc {
-            context.emit_event(EventType::WebxdcInstanceDeleted { msg_id: *msg_id });
+            context.emit_event(EventType::WebxdcInstanceDeleted { msg_id });
         }
 
         let target = context.get_delete_msgs_target().await?;
@@ -1430,7 +1452,7 @@ pub async fn delete_msgs(context: &Context, msg_ids: &[MsgId]) -> Result<()> {
             .map(|dl| dl.msg_id);
 
         if let Some(id) = logging_xdc_id {
-            if id == *msg_id {
+            if id == msg_id {
                 set_debug_logging_xdc(context, None).await?;
             }
         }

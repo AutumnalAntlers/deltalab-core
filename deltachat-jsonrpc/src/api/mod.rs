@@ -4,6 +4,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 pub use deltachat::accounts::Accounts;
+use deltachat::message::get_msg_read_receipts;
 use deltachat::qr::Qr;
 use deltachat::{
     chat::{
@@ -24,7 +25,7 @@ use deltachat::{
     provider::get_provider_info,
     qr,
     qr_code_generator::{generate_backup_qr, get_securejoin_qr_svg},
-    reaction::send_reaction,
+    reaction::{get_msg_reactions, send_reaction},
     securejoin,
     stock_str::StockMessage,
     webxdc::StatusUpdateSerial,
@@ -35,20 +36,19 @@ use tokio::sync::{watch, Mutex, RwLock};
 use walkdir::WalkDir;
 use yerpc::rpc;
 
-pub mod events;
 pub mod types;
 
 use num_traits::FromPrimitive;
 use types::account::Account;
 use types::chat::FullChat;
 use types::contact::ContactObject;
+use types::events::Event;
 use types::http::HttpResponse;
-use types::message::MessageData;
-use types::message::MessageObject;
+use types::message::{MessageData, MessageObject, MessageReadReceipt};
 use types::provider_info::ProviderInfo;
+use types::reactions::JSONRPCReactions;
 use types::webxdc::WebxdcMessageInfo;
 
-use self::events::Event;
 use self::types::message::MessageLoadResult;
 use self::types::{
     chat::{BasicChat, JSONRPCChatVisibility, MuteDuration},
@@ -144,7 +144,11 @@ impl CommandApi {
     }
 }
 
-#[rpc(all_positional, ts_outdir = "typescript/generated")]
+#[rpc(
+    all_positional,
+    ts_outdir = "typescript/generated",
+    openrpc_outdir = "openrpc"
+)]
 impl CommandApi {
     /// Test function.
     async fn sleep(&self, delay: f64) {
@@ -1118,6 +1122,24 @@ impl CommandApi {
         get_msg_info(&ctx, MsgId::new(message_id)).await
     }
 
+    /// Returns contacts that sent read receipts and the time of reading.
+    async fn get_message_read_receipts(
+        &self,
+        account_id: u32,
+        message_id: u32,
+    ) -> Result<Vec<MessageReadReceipt>> {
+        let ctx = self.get_context(account_id).await?;
+        let receipts = get_msg_read_receipts(&ctx, MsgId::new(message_id))
+            .await?
+            .iter()
+            .map(|(contact_id, ts)| MessageReadReceipt {
+                contact_id: contact_id.to_u32(),
+                timestamp: *ts,
+            })
+            .collect();
+        Ok(receipts)
+    }
+
     /// Asks the core to start downloading a message fully.
     /// This function is typically called when the user hits the "Download" button
     /// that is shown by the UI in case `download_state` is `'Available'` or `'Failure'`
@@ -1719,6 +1741,21 @@ impl CommandApi {
         let ctx = self.get_context(account_id).await?;
         let message_id = send_reaction(&ctx, MsgId::new(message_id), &reaction.join(" ")).await?;
         Ok(message_id.to_u32())
+    }
+
+    /// Returns reactions to the message.
+    async fn get_message_reactions(
+        &self,
+        account_id: u32,
+        message_id: u32,
+    ) -> Result<Option<JSONRPCReactions>> {
+        let ctx = self.get_context(account_id).await?;
+        let reactions = get_msg_reactions(&ctx, MsgId::new(message_id)).await?;
+        if reactions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(reactions.into()))
+        }
     }
 
     async fn send_msg(&self, account_id: u32, chat_id: u32, data: MessageData) -> Result<u32> {

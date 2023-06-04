@@ -1,33 +1,28 @@
 import * as T from "../generated/types.js";
+import { EventType } from "../generated/types.js";
 import * as RPC from "../generated/jsonrpc.js";
 import { RawClient } from "../generated/client.js";
 import { WebsocketTransport, BaseTransport, Request } from "yerpc";
 import { TinyEmitter } from "@deltachat/tiny-emitter";
 
-type DCWireEvent<T extends Event> = {
-  event: T;
-  contextId: number;
-};
-// export type Events = Record<
-//   Event["type"] | "ALL",
-//   (event: DeltaChatEvent<Event>) => void
-// >;
-
-type Events = { ALL: (accountId: number, event: Event) => void } & {
-  [Property in Event["type"]]: (
+type Events = { ALL: (accountId: number, event: EventType) => void } & {
+  [Property in EventType["type"]]: (
     accountId: number,
-    event: Extract<Event, { type: Property }>
+    event: Extract<EventType, { type: Property }>
   ) => void;
 };
 
-type ContextEvents = { ALL: (event: Event) => void } & {
-  [Property in Event["type"]]: (
-    event: Extract<Event, { type: Property }>
+type ContextEvents = { ALL: (event: EventType) => void } & {
+  [Property in EventType["type"]]: (
+    event: Extract<EventType, { type: Property }>
   ) => void;
 };
 
-export type DcEvent = Event;
-export type DcEventType<T extends Event["type"]> = Extract<Event, { type: T }>;
+export type DcEvent = EventType;
+export type DcEventType<T extends EventType["type"]> = Extract<
+  EventType,
+  { type: T }
+>;
 
 export class BaseDeltaChat<
   Transport extends BaseTransport<any>
@@ -50,16 +45,17 @@ export class BaseDeltaChat<
   async eventLoop(): Promise<void> {
     while (true) {
       const event = await this.rpc.getNextEvent();
-      this.emit(event.event.type, event.context_id, event.event as any);
-      this.emit("ALL", event.context_id, event.event as any);
+      //@ts-ignore
+      this.emit(event.event.type, event.contextId, event.event);
+      this.emit("ALL", event.contextId, event.event);
 
-      if (this.contextEmitters[event.context_id]) {
-        this.contextEmitters[event.context_id].emit(
+      if (this.contextEmitters[event.contextId]) {
+        this.contextEmitters[event.contextId].emit(
           event.event.type,
           //@ts-ignore
           event.event as any
         );
-        this.contextEmitters[event.context_id].emit("ALL", event.event as any);
+        this.contextEmitters[event.contextId].emit("ALL", event.event as any);
       }
     }
   }

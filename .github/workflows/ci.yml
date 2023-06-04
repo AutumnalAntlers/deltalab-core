@@ -1,3 +1,7 @@
+# GitHub Actions workflow to
+# lint Rust and Python code
+# and run Rust tests, Python tests and async Python tests.
+
 name: Rust CI
 
 # Cancel previously started workflow runs
@@ -222,7 +226,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Currently used Rust version.
           - os: ubuntu-latest
             python: 3.11
           - os: macos-latest
@@ -234,11 +237,12 @@ jobs:
           - os: macos-latest
             python: pypy3.9
 
-          # Minimum Supported Python Version = 3.7
-          # This is the minimum version for which manylinux Python wheels are
-          # built. Test it with minimum supported Rust version.
+          # Minimum Supported Python Version = 3.8
+          #
+          # Python 3.7 has at least one known bug related to starting subprocesses
+          # in asyncio programs: <https://bugs.python.org/issue35621>
           - os: ubuntu-latest
-            python: 3.7
+            python: 3.8
 
     runs-on: ${{ matrix.os }}
     steps:
