@@ -237,7 +237,7 @@ impl<'a> MimeFactory<'a> {
     ) -> Result<MimeFactory<'a>> {
         ensure!(!msg.chat_id.is_special(), "Invalid chat id");
 
-        let contact = Contact::load_from_db(context, msg.from_id).await?;
+        let contact = Contact::get_by_id(context, msg.from_id).await?;
         let from_addr = context.get_primary_self_addr().await?;
         let from_displayname = context
             .get_config(Config::Displayname)
@@ -1133,14 +1133,10 @@ impl<'a> MimeFactory<'a> {
         } else {
             None
         };
-        let final_text = {
-            if let Some(ref text) = placeholdertext {
-                text
-            } else if let Some(ref text) = self.msg.text {
-                text
-            } else {
-                ""
-            }
+        let final_text = if let Some(ref text) = placeholdertext {
+            text
+        } else {
+            &self.msg.text
         };
 
         let mut quoted_text = self
@@ -1787,7 +1783,7 @@ mod tests {
             quote: Option<&Message>,
         ) -> Result<String> {
             let mut new_msg = Message::new(Viewtype::Text);
-            new_msg.set_text(Some("Hi".to_string()));
+            new_msg.set_text("Hi".to_string());
             if let Some(q) = quote {
                 new_msg.set_quote(t, Some(q)).await?;
             }
@@ -1874,7 +1870,7 @@ mod tests {
         let chat_id = ChatId::create_for_contact(&t, contact_id).await.unwrap();
 
         let mut new_msg = Message::new(Viewtype::Text);
-        new_msg.set_text(Some("Hi".to_string()));
+        new_msg.set_text("Hi".to_string());
         new_msg.chat_id = chat_id;
         chat::prepare_msg(&t, chat_id, &mut new_msg).await.unwrap();
 
@@ -1982,7 +1978,7 @@ mod tests {
         chat_id.accept(context).await.unwrap();
 
         let mut new_msg = Message::new(Viewtype::Text);
-        new_msg.set_text(Some("Hi".to_string()));
+        new_msg.set_text("Hi".to_string());
         new_msg.chat_id = chat_id;
         chat::prepare_msg(context, chat_id, &mut new_msg)
             .await
@@ -2100,7 +2096,7 @@ mod tests {
         // send message to bob: that should get multipart/mixed because of the avatar moved to inner header;
         // make sure, `Subject:` stays in the outer header (imf header)
         let mut msg = Message::new(Viewtype::Text);
-        msg.set_text(Some("this is the text!".to_string()));
+        msg.set_text("this is the text!".to_string());
 
         let sent_msg = t.send_msg(chat.id, &mut msg).await;
         let mut payload = sent_msg.payload().splitn(3, "\r\n\r\n");
@@ -2160,7 +2156,7 @@ mod tests {
         // send message to bob: that should get multipart/mixed because of the avatar moved to inner header;
         // make sure, `Subject:` stays in the outer header (imf header)
         let mut msg = Message::new(Viewtype::Text);
-        msg.set_text(Some("this is the text!".to_string()));
+        msg.set_text("this is the text!".to_string());
 
         let sent_msg = t.send_msg(chat.id, &mut msg).await;
         let mut payload = sent_msg.payload().splitn(4, "\r\n\r\n");
@@ -2191,7 +2187,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let alice_contact = Contact::load_from_db(&bob.ctx, alice_id).await.unwrap();
+        let alice_contact = Contact::get_by_id(&bob.ctx, alice_id).await.unwrap();
         assert!(alice_contact
             .get_profile_image(&bob.ctx)
             .await
@@ -2223,7 +2219,7 @@ mod tests {
         assert_eq!(body.match_indices("Subject:").count(), 0);
 
         bob.recv_msg(&sent_msg).await;
-        let alice_contact = Contact::load_from_db(&bob.ctx, alice_id).await.unwrap();
+        let alice_contact = Contact::get_by_id(&bob.ctx, alice_id).await.unwrap();
         assert!(alice_contact
             .get_profile_image(&bob.ctx)
             .await
@@ -2272,7 +2268,7 @@ mod tests {
         // send message to bob: that should get multipart/mixed because of the avatar moved to inner header;
         // make sure, `Subject:` stays in the outer header (imf header)
         let mut msg = Message::new(Viewtype::Text);
-        msg.set_text(Some("this is the text!".to_string()));
+        msg.set_text("this is the text!".to_string());
 
         let sent_msg = t.send_msg(chat.id, &mut msg).await;
         let payload = sent_msg.payload();

@@ -178,7 +178,7 @@ async fn send_alice_handshake_msg(
 ) -> Result<()> {
     let mut msg = Message {
         viewtype: Viewtype::Text,
-        text: Some(format!("Secure-Join: {step}")),
+        text: format!("Secure-Join: {step}"),
         hidden: true,
         ..Default::default()
     };
@@ -210,7 +210,7 @@ async fn fingerprint_equals_sender(
     fingerprint: &Fingerprint,
     contact_id: ContactId,
 ) -> Result<bool> {
-    let contact = Contact::load_from_db(context, contact_id).await?;
+    let contact = Contact::get_by_id(context, contact_id).await?;
     let peerstate = match Peerstate::from_addr(context, contact.get_addr()).await {
         Ok(peerstate) => peerstate,
         Err(err) => {
@@ -411,7 +411,7 @@ pub(crate) async fn handle_securejoin_handshake(
                 .await?;
                 return Ok(HandshakeMessage::Ignore);
             }
-            let contact_addr = Contact::load_from_db(context, contact_id)
+            let contact_addr = Contact::get_by_id(context, contact_id)
                 .await?
                 .get_addr()
                 .to_owned();
@@ -580,7 +580,7 @@ pub(crate) async fn observe_securejoin_on_other_device(
                 .await?;
                 return Ok(HandshakeMessage::Ignore);
             }
-            let addr = Contact::load_from_db(context, contact_id)
+            let addr = Contact::get_by_id(context, contact_id)
                 .await?
                 .get_addr()
                 .to_lowercase();
@@ -640,7 +640,7 @@ pub(crate) async fn observe_securejoin_on_other_device(
                 if mark_peer_as_verified(
                     context,
                     fingerprint,
-                    Contact::load_from_db(context, contact_id)
+                    Contact::get_by_id(context, contact_id)
                         .await?
                         .get_addr()
                         .to_owned(),
@@ -889,7 +889,7 @@ mod tests {
                 .await
                 .expect("Error looking up contact")
                 .expect("Contact not found");
-        let contact_bob = Contact::load_from_db(&alice.ctx, contact_bob_id)
+        let contact_bob = Contact::get_by_id(&alice.ctx, contact_bob_id)
             .await
             .unwrap();
         assert_eq!(
@@ -933,8 +933,7 @@ mod tests {
                 .expect("No messages in Alice's 1:1 chat");
             let msg = Message::load_from_db(&alice.ctx, msg_id).await.unwrap();
             assert!(msg.is_info());
-            let text = msg.get_text().unwrap();
-            assert!(text.contains("bob@example.net verified"));
+            assert!(msg.get_text().contains("bob@example.net verified"));
         }
 
         // Check Alice sent the right message to Bob.
@@ -952,7 +951,7 @@ mod tests {
                 .await
                 .expect("Error looking up contact")
                 .expect("Contact not found");
-        let contact_alice = Contact::load_from_db(&bob.ctx, contact_alice_id)
+        let contact_alice = Contact::get_by_id(&bob.ctx, contact_alice_id)
             .await
             .unwrap();
         assert_eq!(
@@ -982,8 +981,7 @@ mod tests {
                 .expect("No messages in Bob's 1:1 chat");
             let msg = Message::load_from_db(&bob.ctx, msg_id).await.unwrap();
             assert!(msg.is_info());
-            let text = msg.get_text().unwrap();
-            assert!(text.contains("alice@example.org verified"));
+            assert!(msg.get_text().contains("alice@example.org verified"));
         }
 
         // Check Bob sent the final message
@@ -1078,7 +1076,7 @@ mod tests {
             Origin::ManuallyCreated,
         )
         .await?;
-        let contact_bob = Contact::load_from_db(&alice.ctx, contact_bob_id).await?;
+        let contact_bob = Contact::get_by_id(&alice.ctx, contact_bob_id).await?;
         assert_eq!(
             contact_bob.is_verified(&alice.ctx).await?,
             VerifiedStatus::Unverified
@@ -1105,7 +1103,7 @@ mod tests {
                 .await
                 .expect("Error looking up contact")
                 .expect("Contact not found");
-        let contact_alice = Contact::load_from_db(&bob.ctx, contact_alice_id).await?;
+        let contact_alice = Contact::get_by_id(&bob.ctx, contact_alice_id).await?;
         assert_eq!(
             contact_bob.is_verified(&bob.ctx).await?,
             VerifiedStatus::Unverified
@@ -1246,7 +1244,7 @@ mod tests {
             Contact::lookup_id_by_addr(&alice.ctx, "bob@example.net", Origin::Unknown)
                 .await?
                 .expect("Contact not found");
-        let contact_bob = Contact::load_from_db(&alice.ctx, contact_bob_id).await?;
+        let contact_bob = Contact::get_by_id(&alice.ctx, contact_bob_id).await?;
         assert_eq!(
             contact_bob.is_verified(&alice.ctx).await?,
             VerifiedStatus::Unverified
@@ -1292,8 +1290,7 @@ mod tests {
                 .expect("No messages in Alice's group chat");
             let msg = Message::load_from_db(&alice.ctx, msg_id).await.unwrap();
             assert!(msg.is_info());
-            let text = msg.get_text().unwrap();
-            assert!(text.contains("bob@example.net verified"));
+            assert!(msg.get_text().contains("bob@example.net verified"));
         }
 
         // Bob should not yet have Alice verified
@@ -1302,7 +1299,7 @@ mod tests {
                 .await
                 .expect("Error looking up contact")
                 .expect("Contact not found");
-        let contact_alice = Contact::load_from_db(&bob.ctx, contact_alice_id).await?;
+        let contact_alice = Contact::get_by_id(&bob.ctx, contact_alice_id).await?;
         assert_eq!(
             contact_bob.is_verified(&bob.ctx).await?,
             VerifiedStatus::Unverified
@@ -1328,7 +1325,7 @@ mod tests {
             for item in chat::get_chat_msgs(&bob.ctx, bob_chatid).await.unwrap() {
                 if let chat::ChatItem::Message { msg_id } = item {
                     let msg = Message::load_from_db(&bob.ctx, msg_id).await.unwrap();
-                    let text = msg.get_text().unwrap();
+                    let text = msg.get_text();
                     println!("msg {msg_id} text: {text}");
                 }
             }
@@ -1340,7 +1337,7 @@ mod tests {
                 match msg_iter.next() {
                     Some(chat::ChatItem::Message { msg_id }) => {
                         let msg = Message::load_from_db(&bob.ctx, msg_id).await.unwrap();
-                        let text = msg.get_text().unwrap();
+                        let text = msg.get_text();
                         match text.contains("alice@example.org verified") {
                             true => {
                                 assert!(msg.is_info());

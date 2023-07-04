@@ -4,12 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from deltachat import Account, const
+import deltachat as dc
 from deltachat.capi import ffi, lib
 from deltachat.cutil import iter_array
-from deltachat.hookspec import account_hookimpl
-from deltachat.message import Message
 from deltachat.tracker import ImexFailed
+from deltachat import Account, account_hookimpl, Message
 
 
 @pytest.mark.parametrize(
@@ -299,13 +298,13 @@ class TestOfflineChat:
         assert not d["draft"] if chat.get_draft() is None else chat.get_draft()
 
     def test_group_chat_creation_with_translation(self, ac1):
-        ac1.set_stock_translation(const.DC_STR_GROUP_NAME_CHANGED_BY_YOU, "abc %1$s xyz %2$s")
+        ac1.set_stock_translation(dc.const.DC_STR_GROUP_NAME_CHANGED_BY_YOU, "abc %1$s xyz %2$s")
         ac1._evtracker.consume_events()
         with pytest.raises(ValueError):
-            ac1.set_stock_translation(const.DC_STR_FILE, "xyz %1$s")
+            ac1.set_stock_translation(dc.const.DC_STR_FILE, "xyz %1$s")
         ac1._evtracker.get_matching("DC_EVENT_WARNING")
         with pytest.raises(ValueError):
-            ac1.set_stock_translation(const.DC_STR_CONTACT_NOT_VERIFIED, "xyz %2$s")
+            ac1.set_stock_translation(dc.const.DC_STR_CONTACT_NOT_VERIFIED, "xyz %2$s")
         ac1._evtracker.get_matching("DC_EVENT_WARNING")
         with pytest.raises(ValueError):
             ac1.set_stock_translation(500, "xyz %1$s")
@@ -480,6 +479,19 @@ class TestOfflineChat:
         assert contact1.name == "world"
         contact2 = ac1.create_contact("display1 <x@example.org>", "real")
         assert contact2.name == "real"
+
+    def test_send_lots_of_offline_msgs(self, acfactory):
+        ac1 = acfactory.get_pseudo_configured_account()
+        ac1.set_config("configured_mail_server", "example.org")
+        ac1.set_config("configured_mail_user", "example.org")
+        ac1.set_config("configured_mail_pw", "example.org")
+        ac1.set_config("configured_send_server", "example.org")
+        ac1.set_config("configured_send_user", "example.org")
+        ac1.set_config("configured_send_pw", "example.org")
+        ac1.start_io()
+        chat = ac1.create_contact("some1@example.org", name="some1").create_chat()
+        for i in range(50):
+            chat.send_text("hello")
 
     def test_create_chat_simple(self, acfactory):
         ac1 = acfactory.get_pseudo_configured_account()
@@ -805,7 +817,7 @@ class TestOfflineChat:
 
         lp.sec("check message count of only system messages (without daymarkers)")
         dc_array = ffi.gc(
-            lib.dc_get_chat_msgs(ac1._dc_context, chat.id, const.DC_GCM_INFO_ONLY, 0),
+            lib.dc_get_chat_msgs(ac1._dc_context, chat.id, dc.const.DC_GCM_INFO_ONLY, 0),
             lib.dc_array_unref,
         )
         assert len(list(iter_array(dc_array, lambda x: x))) == 2

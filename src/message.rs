@@ -258,7 +258,7 @@ pub struct Message {
     pub(crate) timestamp_rcvd: i64,
     pub(crate) ephemeral_timer: EphemeralTimer,
     pub(crate) ephemeral_timestamp: i64,
-    pub(crate) text: Option<String>,
+    pub(crate) text: String,
 
     /// Message subject.
     ///
@@ -367,7 +367,7 @@ impl Message {
                             .filter(|error| !error.is_empty()),
                         is_dc_message: row.get("msgrmsg")?,
                         mime_modified: row.get("mime_modified")?,
-                        text: Some(text),
+                        text,
                         subject: row.get("subject")?,
                         param: row.get::<_, String>("param")?.parse().unwrap_or_default(),
                         hidden: row.get("hidden")?,
@@ -379,7 +379,8 @@ impl Message {
                     Ok(msg)
                 },
             )
-            .await?;
+            .await
+            .with_context(|| format!("failed to load message {id} from the database"))?;
 
         Ok(msg)
     }
@@ -514,8 +515,8 @@ impl Message {
     }
 
     /// Returns the text of the message.
-    pub fn get_text(&self) -> Option<String> {
-        self.text.as_ref().map(|s| s.to_string())
+    pub fn get_text(&self) -> String {
+        self.text.clone()
     }
 
     /// Returns message subject.
@@ -791,7 +792,7 @@ impl Message {
     }
 
     /// Sets or unsets message text.
-    pub fn set_text(&mut self, text: Option<String>) {
+    pub fn set_text(&mut self, text: String) {
         self.text = text;
     }
 
@@ -883,7 +884,7 @@ impl Message {
                 self.param.set(Param::GuaranteeE2ee, "1");
             }
 
-            let text = quote.get_text().unwrap_or_default();
+            let text = quote.get_text();
             self.param.set(
                 Param::Quote,
                 if text.is_empty() {
@@ -1128,7 +1129,7 @@ pub async fn get_msg_info(context: &Context, msg_id: MsgId) -> Result<String> {
     let fts = timestamp_to_str(msg.get_timestamp());
     ret += &format!("Sent: {fts}");
 
-    let name = Contact::load_from_db(context, msg.from_id)
+    let name = Contact::get_by_id(context, msg.from_id)
         .await
         .map(|contact| contact.get_name_n_addr())
         .unwrap_or_default();
@@ -1177,7 +1178,7 @@ pub async fn get_msg_info(context: &Context, msg_id: MsgId) -> Result<String> {
             let fts = timestamp_to_str(ts);
             ret += &format!("Read: {fts}");
 
-            let name = Contact::load_from_db(context, contact_id)
+            let name = Contact::get_by_id(context, contact_id)
                 .await
                 .map(|contact| contact.get_name_n_addr())
                 .unwrap_or_default();
@@ -1834,7 +1835,7 @@ async fn ndn_maybe_add_info_msg(
                     Contact::lookup_id_by_addr(context, failed_recipient, Origin::Unknown)
                         .await?
                         .context("contact ID not found")?;
-                let contact = Contact::load_from_db(context, contact_id).await?;
+                let contact = Contact::get_by_id(context, contact_id).await?;
                 // Tell the user which of the recipients failed if we know that (because in
                 // a group, this might otherwise be unclear)
                 let text = stock_str::failed_sending_to(context, contact.get_display_name()).await;
@@ -2251,7 +2252,7 @@ mod tests {
         let chat = d.create_chat_with_contact("", "dest@example.com").await;
 
         let mut msg = Message::new(Viewtype::Text);
-        msg.set_text(Some("Quoted message".to_string()));
+        msg.set_text("Quoted message".to_string());
 
         // Prepare message for sending, so it gets a Message-Id.
         assert!(msg.rfc724_mid.is_empty());
@@ -2263,14 +2264,14 @@ mod tests {
         msg2.set_quote(ctx, Some(&msg))
             .await
             .expect("can't set quote");
-        assert!(msg2.quoted_text() == msg.get_text());
+        assert_eq!(msg2.quoted_text().unwrap(), msg.get_text());
 
         let quoted_msg = msg2
             .quoted_message(ctx)
             .await
             .expect("error while retrieving quoted message")
             .expect("quoted message not found");
-        assert!(quoted_msg.get_text() == msg2.quoted_text());
+        assert_eq!(quoted_msg.get_text(), msg2.quoted_text().unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2294,7 +2295,7 @@ mod tests {
         // check chat-id of this message
         let msg = alice.get_last_msg().await;
         assert!(!msg.get_chat_id().is_special());
-        assert_eq!(msg.get_text().unwrap(), "hello".to_string());
+        assert_eq!(msg.get_text(), "hello".to_string());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2308,10 +2309,10 @@ mod tests {
             .unwrap()
             .first()
             .unwrap();
-        let contact = Contact::load_from_db(&alice, contact_id).await.unwrap();
+        let contact = Contact::get_by_id(&alice, contact_id).await.unwrap();
 
         let mut msg = Message::new(Viewtype::Text);
-        msg.set_text(Some("bla blubb".to_string()));
+        msg.set_text("bla blubb".to_string());
         msg.set_override_sender_name(Some("over ride".to_string()));
         assert_eq!(
             msg.get_override_sender_name(),
@@ -2328,10 +2329,10 @@ mod tests {
             .unwrap()
             .first()
             .unwrap();
-        let contact = Contact::load_from_db(&bob, contact_id).await.unwrap();
+        let contact = Contact::get_by_id(&bob, contact_id).await.unwrap();
         let msg = bob.recv_msg(&alice.pop_sent_msg().await).await;
         assert_eq!(msg.chat_id, chat.id);
-        assert_eq!(msg.text, Some("bla blubb".to_string()));
+        assert_eq!(msg.text, "bla blubb");
         assert_eq!(
             msg.get_override_sender_name(),
             Some("over ride".to_string())
@@ -2351,7 +2352,7 @@ mod tests {
         let bob = TestContext::new_bob().await;
         let alice_chat = alice.create_chat(&bob).await;
         let mut msg = Message::new(Viewtype::Text);
-        msg.set_text(Some("this is the text!".to_string()));
+        msg.set_text("this is the text!".to_string());
 
         // alice sends to bob,
         assert_eq!(Chatlist::try_load(&bob, 0, None, None).await?.len(), 0);
@@ -2437,7 +2438,7 @@ mod tests {
 
         // check outgoing messages states on sender side
         let mut alice_msg = Message::new(Viewtype::Text);
-        alice_msg.set_text(Some("hi!".to_string()));
+        alice_msg.set_text("hi!".to_string());
         assert_eq!(alice_msg.get_state(), MessageState::Undefined); // message not yet in db, assert_state() won't work
 
         alice_chat
@@ -2493,7 +2494,7 @@ mod tests {
         )
         .await?;
         let msg = alice.get_last_msg().await;
-        assert_eq!(msg.get_text().unwrap(), "hello".to_string());
+        assert_eq!(msg.get_text(), "hello".to_string());
         assert!(msg.is_bot());
 
         // Alice receives a message from Bob who is not the bot anymore.
@@ -2510,7 +2511,7 @@ mod tests {
         )
         .await?;
         let msg = alice.get_last_msg().await;
-        assert_eq!(msg.get_text().unwrap(), "hello again".to_string());
+        assert_eq!(msg.get_text(), "hello again".to_string());
         assert!(!msg.is_bot());
 
         Ok(())
@@ -2549,13 +2550,13 @@ mod tests {
 
         let sent = alice.send_text(chat.id, "> First quote").await;
         let received = bob.recv_msg(&sent).await;
-        assert_eq!(received.text.as_deref(), Some("> First quote"));
+        assert_eq!(received.text, "> First quote");
         assert!(received.quoted_text().is_none());
         assert!(received.quoted_message(&bob).await?.is_none());
 
         let sent = alice.send_text(chat.id, "> Second quote").await;
         let received = bob.recv_msg(&sent).await;
-        assert_eq!(received.text.as_deref(), Some("> Second quote"));
+        assert_eq!(received.text, "> Second quote");
         assert!(received.quoted_text().is_none());
         assert!(received.quoted_message(&bob).await?.is_none());
 
@@ -2572,24 +2573,24 @@ mod tests {
         let text = "  Foo bar";
         let sent = alice.send_text(chat.id, text).await;
         let received = bob.recv_msg(&sent).await;
-        assert_eq!(received.text.as_deref(), Some(text));
+        assert_eq!(received.text, text);
 
         let text = "Foo                         bar                                                             baz";
         let sent = alice.send_text(chat.id, text).await;
         let received = bob.recv_msg(&sent).await;
-        assert_eq!(received.text.as_deref(), Some(text));
+        assert_eq!(received.text, text);
 
         let text = "> xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx > A";
         let sent = alice.send_text(chat.id, text).await;
         let received = bob.recv_msg(&sent).await;
-        assert_eq!(received.text.as_deref(), Some(text));
+        assert_eq!(received.text, text);
 
         let python_program = "\
 def hello():
     return 'Hello, world!'";
         let sent = alice.send_text(chat.id, python_program).await;
         let received = bob.recv_msg(&sent).await;
-        assert_eq!(received.text.as_deref(), Some(python_program));
+        assert_eq!(received.text, python_program);
 
         Ok(())
     }

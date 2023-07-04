@@ -250,7 +250,7 @@ async fn test_read_receipt_and_unarchive() -> Result<()> {
     .await?;
     let msg = get_chat_msg(&t, group_id, 0, 1).await;
     assert_eq!(msg.is_dc_message, MessengerMessage::Yes);
-    assert_eq!(msg.text.unwrap(), "hello");
+    assert_eq!(msg.text, "hello");
     assert_eq!(msg.state, MessageState::OutDelivered);
     let group = Chat::load_from_db(&t, group_id).await?;
     assert!(group.get_visibility() == ChatVisibility::Normal);
@@ -407,7 +407,7 @@ async fn test_escaped_from() {
             false,
         ).await.unwrap();
     assert_eq!(
-        Contact::load_from_db(&t, contact_id)
+        Contact::get_by_id(&t, contact_id)
             .await
             .unwrap()
             .get_authname(),
@@ -415,7 +415,7 @@ async fn test_escaped_from() {
     );
     let msg = get_chat_msg(&t, chat_id, 0, 1).await;
     assert_eq!(msg.is_dc_message, MessengerMessage::Yes);
-    assert_eq!(msg.text.unwrap(), "hello");
+    assert_eq!(msg.text, "hello");
     assert_eq!(msg.param.get_int(Param::WantsMdn).unwrap(), 1);
 }
 
@@ -452,7 +452,7 @@ async fn test_escaped_recipients() {
     )
     .await
     .unwrap();
-    let contact = Contact::load_from_db(&t, carl_contact_id).await.unwrap();
+    let contact = Contact::get_by_id(&t, carl_contact_id).await.unwrap();
     assert_eq!(contact.get_name(), "");
     assert_eq!(contact.get_display_name(), "h2");
 
@@ -461,7 +461,7 @@ async fn test_escaped_recipients() {
         .await
         .unwrap();
     assert_eq!(msg.is_dc_message, MessengerMessage::Yes);
-    assert_eq!(msg.text.unwrap(), "hello");
+    assert_eq!(msg.text, "hello");
     assert_eq!(msg.param.get_int(Param::WantsMdn).unwrap(), 1);
 }
 
@@ -499,7 +499,7 @@ async fn test_cc_to_contact() {
     )
     .await
     .unwrap();
-    let contact = Contact::load_from_db(&t, carl_contact_id).await.unwrap();
+    let contact = Contact::get_by_id(&t, carl_contact_id).await.unwrap();
     assert_eq!(contact.get_name(), "");
     assert_eq!(contact.get_display_name(), "Carl");
 }
@@ -713,7 +713,7 @@ async fn test_parse_ndn_group_msg() -> Result<()> {
 
     assert_eq!(
         last_msg.text,
-        Some(stock_str::failed_sending_to(&t, "assidhfaaspocwaeofi@gmail.com").await,)
+        stock_str::failed_sending_to(&t, "assidhfaaspocwaeofi@gmail.com").await
     );
     assert_eq!(last_msg.from_id, ContactId::INFO);
     Ok(())
@@ -734,7 +734,7 @@ async fn load_imf_email(context: &Context, imf_raw: &[u8]) -> Message {
 async fn test_html_only_mail() {
     let t = TestContext::new_alice().await;
     let msg = load_imf_email(&t, include_bytes!("../../test-data/message/wrong-html.eml")).await;
-    assert_eq!(msg.text.unwrap(), "   Guten Abend,   \n\n   Lots of text   \n\n   text with Umlaut ä...   \n\n   MfG    [...]");
+    assert_eq!(msg.text, "Guten Abend,\n\nLots of text\n\ntext with Umlaut ä...\n\nMfG\n\n--------------------------------------\n\n[Camping ](https://example.com/)\n\nsomeaddress\n\nsometown");
 }
 
 static GH_MAILINGLIST: &[u8] =
@@ -797,12 +797,12 @@ async fn test_github_mailing_list() -> Result<()> {
     assert_eq!(contacts.len(), 0); // mailing list recipients and senders do not count as "known contacts"
 
     let msg1 = get_chat_msg(&t, chat_id, 0, 2).await;
-    let contact1 = Contact::load_from_db(&t.ctx, msg1.from_id).await?;
+    let contact1 = Contact::get_by_id(&t.ctx, msg1.from_id).await?;
     assert_eq!(contact1.get_addr(), "notifications@github.com");
     assert_eq!(contact1.get_display_name(), "notifications@github.com"); // Make sure this is not "Max Mustermann" or somethinng
 
     let msg2 = get_chat_msg(&t, chat_id, 1, 2).await;
-    let contact2 = Contact::load_from_db(&t.ctx, msg2.from_id).await?;
+    let contact2 = Contact::get_by_id(&t.ctx, msg2.from_id).await?;
     assert_eq!(contact2.get_addr(), "notifications@github.com");
 
     assert_eq!(msg1.get_override_sender_name().unwrap(), "Max Mustermann");
@@ -847,7 +847,7 @@ async fn test_classic_mailing_list() -> Result<()> {
     assert_eq!(chat.get_mailinglist_addr(), Some("delta@codespeak.net"));
 
     let msg = get_chat_msg(&t, chat_id, 0, 1).await;
-    let contact1 = Contact::load_from_db(&t.ctx, msg.from_id).await.unwrap();
+    let contact1 = Contact::get_by_id(&t.ctx, msg.from_id).await.unwrap();
     assert_eq!(contact1.get_addr(), "bob@posteo.org");
 
     let sent = t.send_text(chat.id, "Hello mailinglist!").await;
@@ -890,7 +890,7 @@ async fn test_other_device_writes_to_mailinglist() -> Result<()> {
         Contact::lookup_id_by_addr(&t, "delta@codespeak.net", Origin::Unknown)
             .await?
             .unwrap();
-    let list_post_contact = Contact::load_from_db(&t, list_post_contact_id).await?;
+    let list_post_contact = Contact::get_by_id(&t, list_post_contact_id).await?;
     assert_eq!(
         list_post_contact.param.get(Param::ListId).unwrap(),
         "delta.codespeak.net"
@@ -1158,10 +1158,7 @@ async fn test_dhl_mailing_list() -> Result<()> {
     .await
     .unwrap();
     let msg = t.get_last_msg().await;
-    assert_eq!(
-        msg.text,
-        Some("Ihr Paket ist in der Packstation 123 – bla bla".to_string())
-    );
+    assert_eq!(msg.text, "Ihr Paket ist in der Packstation 123 – bla bla");
     assert!(msg.has_html());
     let chat = Chat::load_from_db(&t, msg.chat_id).await.unwrap();
     assert_eq!(chat.typ, Chattype::Mailinglist);
@@ -1186,10 +1183,7 @@ async fn test_dpd_mailing_list() -> Result<()> {
     .await
     .unwrap();
     let msg = t.get_last_msg().await;
-    assert_eq!(
-        msg.text,
-        Some("Bald ist Ihr DPD Paket da – bla bla".to_string())
-    );
+    assert_eq!(msg.text, "Bald ist Ihr DPD Paket da – bla bla");
     assert!(msg.has_html());
     let chat = Chat::load_from_db(&t, msg.chat_id).await.unwrap();
     assert_eq!(chat.typ, Chattype::Mailinglist);
@@ -1294,10 +1288,7 @@ async fn test_mailing_list_with_mimepart_footer() {
     .await
     .unwrap();
     let msg = t.get_last_msg().await;
-    assert_eq!(
-        msg.text,
-        Some("[Intern] important stuff – Hi mr ... [text part]".to_string())
-    );
+    assert_eq!(msg.text, "[Intern] important stuff – Hi mr ... [text part]");
     assert!(msg.has_html());
     let chat = Chat::load_from_db(&t, msg.chat_id).await.unwrap();
     assert_eq!(get_chat_msgs(&t, msg.chat_id).await.unwrap().len(), 1);
@@ -1320,7 +1311,7 @@ async fn test_mailing_list_with_mimepart_footer_signed() {
     .unwrap();
     let msg = t.get_last_msg().await;
     assert_eq!(get_chat_msgs(&t, msg.chat_id).await.unwrap().len(), 1);
-    let text = msg.text.clone().unwrap();
+    let text = msg.text.clone();
     assert!(text.contains("content text"));
     assert!(!text.contains("footer text"));
     assert!(msg.has_html());
@@ -1365,7 +1356,7 @@ async fn test_apply_mailinglist_changes_assigned_by_reply() {
     .await
     .unwrap()
     .unwrap();
-    let contact = Contact::load_from_db(&t, contact_id).await.unwrap();
+    let contact = Contact::get_by_id(&t, contact_id).await.unwrap();
     assert_eq!(
         contact.param.get(Param::ListId).unwrap(),
         "deltachat-core-rust.deltachat.github.com"
@@ -1384,7 +1375,7 @@ async fn test_mailing_list_chat_message() {
     .await
     .unwrap();
     let msg = t.get_last_msg().await;
-    assert_eq!(msg.text, Some("hello, this is a test 👋\n\n_______________________________________________\nTest1 mailing list -- test1@example.net\nTo unsubscribe send an email to test1-leave@example.net".to_string()));
+    assert_eq!(msg.text, "hello, this is a test 👋\n\n_______________________________________________\nTest1 mailing list -- test1@example.net\nTo unsubscribe send an email to test1-leave@example.net".to_string());
     assert!(!msg.has_html());
     let chat = Chat::load_from_db(&t, msg.chat_id).await.unwrap();
     assert_eq!(chat.typ, Chattype::Mailinglist);
@@ -1464,7 +1455,7 @@ async fn test_pdf_filename_simple() {
     )
     .await;
     assert_eq!(msg.viewtype, Viewtype::File);
-    assert_eq!(msg.text.unwrap(), "mail body");
+    assert_eq!(msg.text, "mail body");
     assert_eq!(msg.param.get(Param::File).unwrap(), "$BLOBDIR/simple.pdf");
 }
 
@@ -1478,7 +1469,7 @@ async fn test_pdf_filename_continuation() {
     )
     .await;
     assert_eq!(msg.viewtype, Viewtype::File);
-    assert_eq!(msg.text.unwrap(), "mail body");
+    assert_eq!(msg.text, "mail body");
     assert_eq!(
         msg.param.get(Param::File).unwrap(),
         "$BLOBDIR/test pdf äöüß.pdf"
@@ -1557,7 +1548,7 @@ async fn test_in_reply_to() {
     .unwrap();
 
     let msg = t.get_last_msg().await;
-    assert_eq!(msg.get_text().unwrap(), "reply foo");
+    assert_eq!(msg.get_text(), "reply foo");
 
     // Load the first message from the same chat.
     let msgs = chat::get_chat_msgs(&t, msg.chat_id).await.unwrap();
@@ -1568,7 +1559,7 @@ async fn test_in_reply_to() {
     };
 
     let reply_msg = Message::load_from_db(&t, *msg_id).await.unwrap();
-    assert_eq!(reply_msg.get_text().unwrap(), "hello foo");
+    assert_eq!(reply_msg.get_text(), "hello foo");
 
     // Check that reply got into the same chat as the original message.
     assert_eq!(msg.chat_id, reply_msg.chat_id);
@@ -1626,7 +1617,7 @@ async fn test_in_reply_to_two_member_group() {
     let msg = t.get_last_msg().await;
     let chat = Chat::load_from_db(&t, msg.chat_id).await.unwrap();
     assert_eq!(chat.typ, Chattype::Group);
-    assert_eq!(msg.get_text().unwrap(), "classic reply");
+    assert_eq!(msg.get_text(), "classic reply");
 
     // Receive a Delta Chat reply from Alice.
     // It is assigned to group chat, because it has a group ID.
@@ -1652,7 +1643,7 @@ async fn test_in_reply_to_two_member_group() {
     let msg = t.get_last_msg().await;
     let chat = Chat::load_from_db(&t, msg.chat_id).await.unwrap();
     assert_eq!(chat.typ, Chattype::Group);
-    assert_eq!(msg.get_text().unwrap(), "chat reply");
+    assert_eq!(msg.get_text(), "chat reply");
 
     // Receive a private Delta Chat reply from Alice.
     // It is assigned to 1:1 chat, because it has no group ID,
@@ -1679,7 +1670,7 @@ async fn test_in_reply_to_two_member_group() {
     let msg = t.get_last_msg().await;
     let chat = Chat::load_from_db(&t, msg.chat_id).await.unwrap();
     assert_eq!(chat.typ, Chattype::Single);
-    assert_eq!(msg.get_text().unwrap(), "private reply");
+    assert_eq!(msg.get_text(), "private reply");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1690,7 +1681,7 @@ async fn test_save_mime_headers_off() -> anyhow::Result<()> {
     chat::send_text_msg(&alice, chat_alice.id, "hi!".to_string()).await?;
 
     let msg = bob.recv_msg(&alice.pop_sent_msg().await).await;
-    assert_eq!(msg.get_text(), Some("hi!".to_string()));
+    assert_eq!(msg.get_text(), "hi!");
     assert!(!msg.get_showpadlock());
     let mime = message::get_mime_headers(&bob, msg.id).await?;
     assert!(mime.is_empty());
@@ -1709,7 +1700,7 @@ async fn test_save_mime_headers_on() -> anyhow::Result<()> {
     chat::send_text_msg(&alice, chat_alice.id, "hi!".to_string()).await?;
 
     let msg = bob.recv_msg(&alice.pop_sent_msg().await).await;
-    assert_eq!(msg.get_text(), Some("hi!".to_string()));
+    assert_eq!(msg.get_text(), "hi!");
     assert!(!msg.get_showpadlock());
     let mime = message::get_mime_headers(&bob, msg.id).await?;
     let mime_str = String::from_utf8_lossy(&mime);
@@ -1720,7 +1711,7 @@ async fn test_save_mime_headers_on() -> anyhow::Result<()> {
     let chat_bob = bob.create_chat(&alice).await;
     chat::send_text_msg(&bob, chat_bob.id, "ho!".to_string()).await?;
     let msg = alice.recv_msg(&bob.pop_sent_msg().await).await;
-    assert_eq!(msg.get_text(), Some("ho!".to_string()));
+    assert_eq!(msg.get_text(), "ho!");
     assert!(msg.get_showpadlock());
     let mime = message::get_mime_headers(&alice, msg.id).await?;
     let mime_str = String::from_utf8_lossy(&mime);
@@ -1780,7 +1771,7 @@ async fn create_test_alias(chat_request: bool, group_request: bool) -> (TestCont
 
     let msg = alice.get_last_msg().await;
     assert_eq!(msg.get_subject(), "i have a question");
-    assert!(msg.get_text().unwrap().contains("hi support!"));
+    assert!(msg.get_text().contains("hi support!"));
     let chat = Chat::load_from_db(&alice, msg.chat_id).await.unwrap();
     assert_eq!(chat.typ, Chattype::Group);
     assert_eq!(get_chat_msgs(&alice, chat.id).await.unwrap().len(), 1);
@@ -1805,7 +1796,7 @@ async fn create_test_alias(chat_request: bool, group_request: bool) -> (TestCont
     let msg = Message::load_from_db(&claire, msg_id).await.unwrap();
     msg.chat_id.accept(&claire).await.unwrap();
     assert_eq!(msg.get_subject(), "i have a question");
-    assert!(msg.get_text().unwrap().contains("hi support!"));
+    assert!(msg.get_text().contains("hi support!"));
     let chat = Chat::load_from_db(&claire, msg.chat_id).await.unwrap();
     if group_request {
         assert_eq!(chat.typ, Chattype::Group);
@@ -1826,7 +1817,7 @@ async fn check_alias_reply(reply: &[u8], chat_request: bool, group_request: bool
     receive_imf(&alice, reply, false).await.unwrap();
     let answer = alice.get_last_msg().await;
     assert_eq!(answer.get_subject(), "Re: i have a question");
-    assert!(answer.get_text().unwrap().contains("the version is 1.0"));
+    assert!(answer.get_text().contains("the version is 1.0"));
     assert_eq!(answer.chat_id, request.chat_id);
     let chat_contacts = get_chat_contacts(&alice, answer.chat_id)
         .await
@@ -1849,7 +1840,7 @@ async fn check_alias_reply(reply: &[u8], chat_request: bool, group_request: bool
     receive_imf(&claire, reply, false).await.unwrap();
     let answer = claire.get_last_msg().await;
     assert_eq!(answer.get_subject(), "Re: i have a question");
-    assert!(answer.get_text().unwrap().contains("the version is 1.0"));
+    assert!(answer.get_text().contains("the version is 1.0"));
     assert_eq!(answer.chat_id, request.chat_id);
     assert_eq!(
         answer.get_override_sender_name().unwrap(),
@@ -1921,7 +1912,7 @@ async fn test_dont_assign_to_trash_by_parent() {
     chat_id.accept(&t).await.unwrap();
     let msg = get_chat_msg(&t, chat_id, 0, 1).await; // Make sure that the message is actually in the chat
     assert!(!msg.chat_id.is_special());
-    assert_eq!(msg.text.unwrap(), "Hi – hello");
+    assert_eq!(msg.text, "Hi – hello");
 
     println!("\n========= Delete the message ==========");
     msg.id.trash(&t).await.unwrap();
@@ -1945,7 +1936,7 @@ async fn test_dont_assign_to_trash_by_parent() {
     .unwrap();
     let msg = t.get_last_msg().await;
     assert!(!msg.chat_id.is_special()); // Esp. check that the chat_id is not TRASH
-    assert_eq!(msg.text.unwrap(), "Reply");
+    assert_eq!(msg.text, "Reply");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1996,7 +1987,7 @@ Message content",
 
     // Outgoing email should create a chat.
     let msg = alice.get_last_msg().await;
-    assert_eq!(msg.get_text().unwrap(), "Subj – Message content");
+    assert_eq!(msg.get_text(), "Subj – Message content");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2038,12 +2029,12 @@ Message content
 Second signature";
 
     receive_imf(&alice, first_message, false).await?;
-    let contact = Contact::load_from_db(&alice, bob_contact_id).await?;
+    let contact = Contact::get_by_id(&alice, bob_contact_id).await?;
     assert_eq!(contact.get_status(), "First signature");
     assert_eq!(contact.get_display_name(), "Bob1");
 
     receive_imf(&alice, second_message, false).await?;
-    let contact = Contact::load_from_db(&alice, bob_contact_id).await?;
+    let contact = Contact::get_by_id(&alice, bob_contact_id).await?;
     assert_eq!(contact.get_status(), "Second signature");
     assert_eq!(contact.get_display_name(), "Bob2");
 
@@ -2051,7 +2042,7 @@ Second signature";
     receive_imf(&alice, first_message, false).await?;
 
     // No change because last message is duplicate of the first.
-    let contact = Contact::load_from_db(&alice, bob_contact_id).await?;
+    let contact = Contact::get_by_id(&alice, bob_contact_id).await?;
     assert_eq!(contact.get_status(), "Second signature");
     assert_eq!(contact.get_display_name(), "Bob2");
 
@@ -2069,7 +2060,7 @@ async fn test_ignore_footer_status_from_mailinglist() -> Result<()> {
     )
     .await?
     .0;
-    let bob = Contact::load_from_db(&t, bob_id).await?;
+    let bob = Contact::get_by_id(&t, bob_id).await?;
     assert_eq!(bob.get_status(), "");
     assert_eq!(Chatlist::try_load(&t, 0, None, None).await?.len(), 0);
 
@@ -2089,7 +2080,7 @@ Original signature",
     .await?;
     let msg = t.get_last_msg().await;
     let one2one_chat_id = msg.chat_id;
-    let bob = Contact::load_from_db(&t, bob_id).await?;
+    let bob = Contact::get_by_id(&t, bob_id).await?;
     assert_eq!(bob.get_status(), "Original signature");
     assert!(!msg.has_html());
 
@@ -2112,7 +2103,7 @@ Tap here to unsubscribe ...",
     )
     .await?;
     let ml_chat_id = t.get_last_msg().await.chat_id;
-    let bob = Contact::load_from_db(&t, bob_id).await?;
+    let bob = Contact::get_by_id(&t, bob_id).await?;
     assert_eq!(bob.get_status(), "Original signature");
 
     receive_imf(
@@ -2129,7 +2120,7 @@ Original signature updated",
         false,
     )
     .await?;
-    let bob = Contact::load_from_db(&t, bob_id).await?;
+    let bob = Contact::get_by_id(&t, bob_id).await?;
     assert_eq!(bob.get_status(), "Original signature updated");
     assert_eq!(get_chat_msgs(&t, one2one_chat_id).await?.len(), 2);
     assert_eq!(get_chat_msgs(&t, ml_chat_id).await?.len(), 1);
@@ -2164,7 +2155,7 @@ sig wednesday",
     )
     .await?;
     let chat_id = t.get_last_msg().await.chat_id;
-    let bob = Contact::load_from_db(&t, bob_id).await?;
+    let bob = Contact::get_by_id(&t, bob_id).await?;
     assert_eq!(bob.get_status(), "sig wednesday");
     assert_eq!(get_chat_msgs(&t, chat_id).await?.len(), 1);
 
@@ -2182,7 +2173,7 @@ sig tuesday",
         false,
     )
     .await?;
-    let bob = Contact::load_from_db(&t, bob_id).await?;
+    let bob = Contact::get_by_id(&t, bob_id).await?;
     assert_eq!(bob.get_status(), "sig wednesday");
     assert_eq!(get_chat_msgs(&t, chat_id).await?.len(), 2);
 
@@ -2200,7 +2191,7 @@ sig thursday",
         false,
     )
     .await?;
-    let bob = Contact::load_from_db(&t, bob_id).await?;
+    let bob = Contact::get_by_id(&t, bob_id).await?;
     assert_eq!(bob.get_status(), "sig thursday");
     assert_eq!(get_chat_msgs(&t, chat_id).await?.len(), 3);
 
@@ -2243,7 +2234,7 @@ Message-ID: <Gr.eJ_llQIXf0K.buxmrnMmG0Y@gmx.de>"
 
         let group_msg = t.get_last_msg().await;
         assert_eq!(
-            group_msg.text.unwrap(),
+            group_msg.text,
             if *outgoing_is_classical {
                 "single reply-to – Hello, I\'ve just created the group \"single reply-to\" for us."
             } else {
@@ -2283,7 +2274,7 @@ Private reply"#,
         .unwrap();
 
         let private_msg = t.get_last_msg().await;
-        assert_eq!(private_msg.text.unwrap(), "Private reply");
+        assert_eq!(private_msg.text, "Private reply");
         let private_chat = Chat::load_from_db(&t, private_msg.chat_id).await.unwrap();
         assert_eq!(private_chat.typ, Chattype::Single);
         assert_ne!(private_msg.chat_id, group_msg.chat_id);
@@ -2332,7 +2323,7 @@ Message-ID: <Gr.iy1KCE2y65_.mH2TM52miv9@testrun.org>"
         .unwrap();
         let group_msg = t.get_last_msg().await;
         assert_eq!(
-            group_msg.text.unwrap(),
+            group_msg.text,
             if *outgoing_is_classical {
                 "single reply-to – Hello, I\'ve just created the group \"single reply-to\" for us."
             } else {
@@ -2378,7 +2369,7 @@ Sent with my Delta Chat Messenger: https://delta.chat
         .unwrap();
 
         let private_msg = t.get_last_msg().await;
-        assert_eq!(private_msg.text.unwrap(), "Private reply");
+        assert_eq!(private_msg.text, "Private reply");
         let private_chat = Chat::load_from_db(&t, private_msg.chat_id).await.unwrap();
         assert_eq!(private_chat.typ, Chattype::Single);
         assert_ne!(private_msg.chat_id, group_msg.chat_id);
@@ -2420,7 +2411,7 @@ Message-ID: <Gr.eJ_llQIXf0K.buxmrnMmG0Y@gmx.de>"
 
         let group_msg = t.get_last_msg().await;
         assert_eq!(
-            group_msg.text.unwrap(),
+            group_msg.text,
             if *outgoing_is_classical {
                 "single reply-to – Hello, I\'ve just created the group \"single reply-to\" for us."
             } else {
@@ -2457,7 +2448,7 @@ Outgoing reply to all"#,
         .unwrap();
 
         let reply = t.get_last_msg().await;
-        assert_eq!(reply.text.unwrap(), "Out subj – Outgoing reply to all");
+        assert_eq!(reply.text, "Out subj – Outgoing reply to all");
         let reply_chat = Chat::load_from_db(&t, reply.chat_id).await.unwrap();
         assert_eq!(reply_chat.typ, Chattype::Group);
         assert_eq!(reply.chat_id, group_msg.chat_id);
@@ -2480,7 +2471,7 @@ Reply to all"#,
         .unwrap();
 
         let reply = t.get_last_msg().await;
-        assert_eq!(reply.text.unwrap(), "In subj – Reply to all");
+        assert_eq!(reply.text, "In subj – Reply to all");
         let reply_chat = Chat::load_from_db(&t, reply.chat_id).await.unwrap();
         assert_eq!(reply_chat.typ, Chattype::Group);
         assert_eq!(reply.chat_id, group_msg.chat_id);
@@ -2766,7 +2757,7 @@ Hi, I created a group"#,
     .await?;
     let msg_out = t.get_last_msg().await;
     assert_eq!(msg_out.from_id, ContactId::SELF);
-    assert_eq!(msg_out.text.unwrap(), "Hi, I created a group");
+    assert_eq!(msg_out.text, "Hi, I created a group");
     assert_eq!(msg_out.in_reply_to, None);
 
     // Bob replies from a different address
@@ -2790,7 +2781,7 @@ Reply from different address
     .await?;
     let msg_in = t.get_last_msg().await;
     assert_eq!(msg_in.to_id, ContactId::SELF);
-    assert_eq!(msg_in.text.unwrap(), "Reply from different address");
+    assert_eq!(msg_in.text, "Reply from different address");
     assert_eq!(
         msg_in.in_reply_to.unwrap(),
         "Gr.qetqsutor7a.Aresxresy-4@deltachat.de"
@@ -2868,22 +2859,22 @@ async fn test_accept_outgoing() -> Result<()> {
     alice1.recv_msg(&sent).await;
     alice2.recv_msg(&sent).await;
     let alice1_msg = bob2.recv_msg(&sent).await;
-    assert_eq!(alice1_msg.text.unwrap(), "Hello!");
+    assert_eq!(alice1_msg.text, "Hello!");
     let alice1_chat = chat::Chat::load_from_db(&alice1, alice1_msg.chat_id).await?;
     assert!(alice1_chat.is_contact_request());
 
     let alice2_msg = alice2.get_last_msg().await;
-    assert_eq!(alice2_msg.text.unwrap(), "Hello!");
+    assert_eq!(alice2_msg.text, "Hello!");
     let alice2_chat = chat::Chat::load_from_db(&alice2, alice2_msg.chat_id).await?;
     assert!(alice2_chat.is_contact_request());
 
     let bob1_msg = bob1.get_last_msg().await;
-    assert_eq!(bob1_msg.text.unwrap(), "Hello!");
+    assert_eq!(bob1_msg.text, "Hello!");
     let bob1_chat = chat::Chat::load_from_db(&bob1, bob1_msg.chat_id).await?;
     assert!(!bob1_chat.is_contact_request());
 
     let bob2_msg = bob2.get_last_msg().await;
-    assert_eq!(bob2_msg.text.unwrap(), "Hello!");
+    assert_eq!(bob2_msg.text, "Hello!");
     let bob2_chat = chat::Chat::load_from_db(&bob2, bob2_msg.chat_id).await?;
     assert!(!bob2_chat.is_contact_request());
 
@@ -2929,7 +2920,7 @@ async fn test_outgoing_private_reply_multidevice() -> Result<()> {
     assert_eq!(received.from_id, alice1_bob_contact.id);
     assert_eq!(received.to_id, ContactId::SELF);
     assert!(!received.hidden);
-    assert_eq!(received.text, Some("Hello all!".to_string()));
+    assert_eq!(received.text, "Hello all!");
     assert_eq!(received.in_reply_to, None);
     assert_eq!(received.chat_blocked, Blocked::Request);
 
@@ -2939,7 +2930,7 @@ async fn test_outgoing_private_reply_multidevice() -> Result<()> {
     assert_eq!(received_group.can_send(&alice1).await?, false); // Can't send because it's Blocked::Request
 
     let mut msg_out = Message::new(Viewtype::Text);
-    msg_out.set_text(Some("Private reply".to_string()));
+    msg_out.set_text("Private reply".to_string());
 
     assert_eq!(received_group.blocked, Blocked::Request);
     msg_out.set_quote(&alice1, Some(&received)).await?;
@@ -2957,10 +2948,10 @@ async fn test_outgoing_private_reply_multidevice() -> Result<()> {
     assert_eq!(received.from_id, ContactId::SELF);
     assert_eq!(received.to_id, alice2_bob_contact.id);
     assert!(!received.hidden);
-    assert_eq!(received.text, Some("Private reply".to_string()));
+    assert_eq!(received.text, "Private reply");
     assert_eq!(
         received.parent(&alice2).await?.unwrap().text,
-        Some("Hello all!".to_string())
+        "Hello all!".to_string()
     );
     assert_eq!(received.chat_blocked, Blocked::Not);
 
@@ -3021,13 +3012,13 @@ async fn test_no_private_reply_to_blocked_account() -> Result<()> {
 
     // =============== Alice replies private to Bob ==============
     let received = alice.get_last_msg().await;
-    assert_eq!(received.text, Some("Hello all!".to_string()));
+    assert_eq!(received.text, "Hello all!");
 
     let received_group = Chat::load_from_db(&alice, received.chat_id).await?;
     assert_eq!(received_group.typ, Chattype::Group);
 
     let mut msg_out = Message::new(Viewtype::Text);
-    msg_out.set_text(Some("Private reply".to_string()));
+    msg_out.set_text("Private reply".to_string());
     msg_out.set_quote(&alice, Some(&received)).await?;
 
     let alice_bob_chat = alice.create_chat(&bob).await;
@@ -3043,7 +3034,7 @@ async fn test_no_private_reply_to_blocked_account() -> Result<()> {
     // since only chat is a group, no new open chat has been created
     assert_eq!(chat.typ, Chattype::Group);
     let received = bob.get_last_msg().await;
-    assert_eq!(received.text, Some("Hello all!".to_string()));
+    assert_eq!(received.text, "Hello all!");
 
     // =============== Bob unblocks Alice ================
     // test if the blocked chat is restored correctly
@@ -3054,7 +3045,7 @@ async fn test_no_private_reply_to_blocked_account() -> Result<()> {
     let chat = Chat::load_from_db(&bob, chat_id).await.unwrap();
     assert_eq!(chat.typ, Chattype::Single);
     let received = bob.get_last_msg().await;
-    assert_eq!(received.text, Some("Private reply".to_string()));
+    assert_eq!(received.text, "Private reply");
 
     Ok(())
 }
